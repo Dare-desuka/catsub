@@ -2,11 +2,13 @@
 
 CatSub adalah pipeline lokal untuk membuat subtitle Indonesia dari video berbahasa **Jepang, China, atau Inggris** secara otomatis.
 
-Alurnya sederhana: video masuk → ditranskripsi jadi teks bahasa sumber → diterjemahkan ke Indonesia → (opsional) di-mux jadi file MKV dengan softsub. Semua berjalan lokal di mesin kamu; hanya proses AI (transcribe & translate) yang memakai API Groq.
+Alurnya sederhana: video masuk → ditranskripsi jadi teks bahasa sumber → diterjemahkan ke Indonesia → (opsional) di-mux jadi file MKV dengan softsub. Semua berjalan lokal di mesin kamu; hanya proses AI (transcribe & translate) yang memanggil **Groq API**.
 
 ```
-video (ja/zh/en)  →  transcribe (Whisper)  →  translate (LLaMA)  →  subtitle Indonesia  →  MKV softsub
+video (ja/zh/en)  →  transcribe (Groq Whisper)  →  translate (Groq LLaMA)  →  subtitle Indonesia  →  MKV softsub
 ```
+
+> **Tidak butuh GPU.** Seluruh pemrosesan model (Whisper large-v3 untuk transcribe, LLaMA 3.3 70B untuk translate) berjalan di server Groq. Di mesin lokal kamu hanya butuh Python + `ffmpeg` untuk memotong audio. Dependency inti cukup satu paket: `groq`.
 
 ## Fitur
 
@@ -49,28 +51,23 @@ File `.env` bersifat lokal dan tidak ikut ke repository.
 ## Requirements
 
 - Python 3 dengan `venv` (virtualenv dibuat per modul: `whisper/venv`, `srt/venv`).
-- `ffmpeg` dan `ffprobe` tersedia di sistem.
+- `ffmpeg` dan `ffprobe` tersedia di sistem (untuk memotong audio per-chunk sebelum dikirim ke Groq).
 - `gio` (opsional, hanya untuk fitur `CLEAN=1`; fallback ke `rm` kalau tidak ada).
+- Koneksi internet (proses AI berjalan di Groq).
 
 ## Install
-
-Cara termudah — installer root, lalu pilih CPU atau GPU:
 
 ```bash
 ./install.sh
 ```
 
-- **CPU-only**: download lebih kecil, cocok untuk laptop/PC biasa.
-- **GPU/CUDA**: untuk PC NVIDIA yang ingin memakai PyTorch GPU (download lebih besar).
+Installer akan membuat venv di `whisper/` dan `srt/`, lalu memasang dependency (`groq`) di masing-masing.
 
-Install manual per modul (jalankan di `whisper/` dan `srt/`):
+Install manual per modul:
 
 ```bash
-# CPU-only
-pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
-
-# GPU/CUDA
-pip install -r requirements.gpu.txt
+cd whisper && python3 -m venv venv && venv/bin/pip install -r requirements.txt
+cd srt    && python3 -m venv venv && venv/bin/pip install -r requirements.txt
 ```
 
 ## Struktur Folder
@@ -78,20 +75,18 @@ pip install -r requirements.gpu.txt
 ```text
 catsub/
 ├── sub.sh                  # pipeline wrapper (transcribe → translate → mux)
-├── install.sh              # installer dependency (CPU/GPU)
+├── install.sh              # installer dependency
 ├── groq_util.py            # kode bersama (API key, rotasi, helper SRT, filter)
 ├── .env.example            # template API key
 ├── .gitignore
 ├── whisper/                # modul transkripsi (video → SRT bahasa sumber)
 │   ├── transcribe.py
 │   ├── requirements.txt
-│   ├── requirements.gpu.txt
 │   ├── videos/             # ← taruh video mentah di sini
 │   └── transcripts/        # hasil transcribe (cache)
 ├── srt/                    # modul terjemahan (SRT sumber → SRT Indonesia)
 │   ├── srt.py
 │   ├── requirements.txt
-│   ├── requirements.gpu.txt
 │   ├── queue/              # antrian SRT yang sedang diterjemahkan (temp)
 │   └── subtitles/          # hasil SRT Indonesia (_ID.srt)
 └── output/                 # hasil MKV softsub (MKV=1)
@@ -181,12 +176,3 @@ python3 srt.py --lang ja --input /path/input.srt --output /path/output_ID.srt
 ```
 
 Bahasa sumber didukung: `ja`, `zh`, `en`. Target selalu Bahasa Indonesia (suffix `_ID.srt`).
-
-## Verifikasi Dependency
-
-Pastikan `requirements.txt` masih sinkron dengan venv:
-
-```bash
-cd whisper && venv/bin/pip freeze | diff -u - requirements.txt
-cd srt && venv/bin/pip freeze | diff -u - requirements.txt
-```
