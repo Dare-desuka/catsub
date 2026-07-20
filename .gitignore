@@ -1,0 +1,27 @@
+venv/
+__pycache__/
+*.pyc
+.env
+AGENTS.md
+
+# media & hasil (jangan di-repo)
+*.mp4
+*.mkv
+*.avi
+*.mov
+*.webm
+*.flv
+*.srt
+*.lang
+
+# isi folder data diabaikan, struktur folder tetap ada
+whisper/videos/*
+!whisper/videos/.gitkeep
+whisper/transcripts/*
+!whisper/transcripts/.gitkeep
+srt/queue/*
+!srt/queue/.gitkeep
+srt/subtitles/*
+!srt/subtitles/.gitkeep
+output/*
+!output/.gitkeep
