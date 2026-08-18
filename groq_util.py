@@ -34,7 +34,15 @@ HALLUC_JA_EXACT = {
     "ありがとうございました。おやすみなさい。",
     "ご視聴ありがとうございました。",
 }
-HALLUC_JA_CONTAINS = {"ご視聴ありがとう", "おやすみなさい", "お疲れ様でした"}
+HALLUC_JA_CONTAINS = {
+    "ご視聴ありがとう", "おやすみなさい", "お疲れ様でした",
+    # ponytail: frasa halusinasi terkonfirmasi (adegan musik/desahan); whack-a-mole
+    # by design — tambah frasa baru tiap ketemu video lain.
+    "お父さんの悲しみ", "会社行っちゃう", "アルファレンス",
+    "私は2歳です", "私は彼らを愛しています", "お母さんは生きています",
+    "私のお母さんのお家庭", "家族を抱えている", "生きていることを知っています",
+    "レインボーチャンネル",
+}
 
 HALLUC_ZH_EXACT = {
     "感谢观看", "谢谢观看", "感谢收看", "谢谢收看",
@@ -48,8 +56,41 @@ HALLUC_EN_EXACT = {
     "Please subscribe.", "Don't forget to subscribe.",
     "Good night.", "Goodbye.", "Bye.", "The end.",
     "Subtitles by", "Translated by",
+    "Please like and subscribe.", "Don't forget to like and subscribe.",
+    "Like and subscribe.",
+    "I'm a student at the University of Arizona.",
+    "I am a student at the University of Arizona.",
+    "i a student at the university of arizona",
 }
-HALLUC_EN_CONTAINS = {"Thank you for watching", "Thanks for watching", "Please subscribe", "Subtitles by"}
+HALLUC_EN_CONTAINS = {
+    "Thank you for watching", "Thanks for watching",
+    "Please subscribe", "Subtitles by",
+    "thank you for watching", "thanks for watching",
+    "please subscribe", "subtitles by",
+    "like and subscribe", "Like and subscribe",
+    "university of arizona", "University of Arizona",
+    "at the university of arizona",
+}
+
+REPEATED_PHRASE_RE = re.compile(r"(.{10,})\s+\1")
+
+
+def repeated_phrase(text: str) -> str:
+    """Deteksi frasa terulang (hallucination Whisper klasik), lintas bahasa."""
+    m = REPEATED_PHRASE_RE.search(text.strip())
+    return m.group(1).strip() if m else ""
+
+
+def check_latin_junk(text: str, src_char_re, label: str) -> str:
+    """Teks Latin murni tanpa karakter bahasa sumber → junk. Dipakai semua
+    bahasa non-English (char_re bahasa tl memang Latin, jadi otomatis lolos)."""
+    t = text.strip()
+    latin_words = MIXED_JUNK_RE.findall(t)
+    src_chars = src_char_re.findall(t)
+    if latin_words and not src_chars:
+        return f"kata Latin tanpa konteks {label}: {latin_words}"
+    return ""
+
 
 # ponytail: desah/napas lintas bahasa — buang kalau segment UTUH berisi ini
 BREATH_EXACT = {

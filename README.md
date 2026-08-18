@@ -1,20 +1,20 @@
 # CatSub
 
-CatSub adalah pipeline lokal untuk membuat subtitle Indonesia dari video berbahasa **Jepang, China, atau Inggris** secara otomatis.
+CatSub adalah pipeline lokal untuk membuat subtitle Indonesia dari video berbahasa **Jepang, China, Inggris, Korea, Thailand, Filipina, atau Rusia** secara otomatis.
 
 Alurnya sederhana: video masuk → ditranskripsi jadi teks bahasa sumber → diterjemahkan ke Indonesia → (opsional) di-mux jadi file MKV dengan softsub. Semua berjalan lokal di mesin kamu; hanya proses AI (transcribe & translate) yang memanggil **Groq API**.
 
 ```
-video (ja/zh/en)  →  transcribe (Groq Whisper)  →  translate (Groq LLaMA)  →  subtitle Indonesia  →  MKV softsub
+video (ja/zh/en/ko/th/tl/ru)  →  transcribe (Groq Whisper)  →  translate (Groq GPT-OSS)  →  subtitle Indonesia  →  MKV softsub
 ```
 
-> **Tidak butuh GPU.** Seluruh pemrosesan model (Whisper large-v3 untuk transcribe, LLaMA 3.3 70B untuk translate) berjalan di server Groq. Di mesin lokal kamu hanya butuh Python + `ffmpeg` untuk memotong audio. Dependency inti cukup satu paket: `groq`.
+> **Tidak butuh GPU.** Seluruh pemrosesan model (Whisper large-v3 untuk transcribe, GPT-OSS 120B untuk translate) berjalan di server Groq. Di mesin lokal kamu hanya butuh Python + `ffmpeg` untuk memotong audio. Dependency inti cukup satu paket: `groq`.
 
 ## Fitur
 
-- **Auto-detect bahasa** sumber (`auto`) atau paksa manual (`ja` / `zh` / `en`).
+- **Auto-detect bahasa** sumber (`auto`) atau paksa manual (`ja` / `zh` / `en` / `ko` / `th` / `tl` / `ru`).
 - **Transkripsi** dengan Groq Whisper `whisper-large-v3`.
-- **Terjemahan** ke Bahasa Indonesia dengan Groq LLaMA `llama-3.3-70b-versatile`.
+- **Terjemahan** ke Bahasa Indonesia dengan Groq GPT-OSS `openai/gpt-oss-120b`.
 - **Rotasi multi API key** — pakai beberapa key sekaligus (round-robin) untuk menghindari rate limit.
 - **Resume translate** — kalau sebagian baris gagal diterjemahkan, jalankan ulang dan hanya baris yang gagal yang diproses (baris valid dipakai ulang).
 - **Cache transkripsi** — hasil transcribe disimpan, jadi translate yang gagal bisa diulang tanpa transcribe dua kali.
@@ -119,7 +119,7 @@ Semua opsi diatur lewat environment variable:
 |----------|-------|--------|
 | `FORCE` | `1` | Paksa ulang semua proses (abaikan hasil lama). |
 | `AUTO` | `1` | Jalan terus tanpa pause per-video. |
-| `SUB_LANG` | `auto`/`ja`/`zh`/`en` | Bahasa sumber (default `auto`). |
+| `SUB_LANG` | `auto`/`ja`/`zh`/`en`/`ko`/`th`/`tl`/`ru` | Bahasa sumber (default `auto`). |
 | `MKV` | `1` | Setelah translate, mux jadi `.mkv` softsub di `output/`. |
 | `CLEAN` | `1` | Setelah MKV sukses, kirim video + SRT ke trash. Butuh `MKV=1`. |
 
@@ -165,7 +165,7 @@ source venv/bin/activate
 python3 transcribe.py --lang auto --video /path/video.mp4 --output /path/output.srt
 ```
 
-Bahasa didukung: `auto`, `ja`, `zh`, `en`.
+Bahasa didukung: `auto`, `ja`, `zh`, `en`, `ko`, `th`, `tl`, `ru`.
 
 Terjemahan SRT saja:
 
@@ -175,4 +175,4 @@ source venv/bin/activate
 python3 srt.py --lang ja --input /path/input.srt --output /path/output_ID.srt
 ```
 
-Bahasa sumber didukung: `ja`, `zh`, `en`. Target selalu Bahasa Indonesia (suffix `_ID.srt`).
+Bahasa sumber didukung: `ja`, `zh`, `en`, `ko`, `th`, `tl`, `ru`. Target selalu Bahasa Indonesia (suffix `_ID.srt`).

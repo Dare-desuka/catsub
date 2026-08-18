@@ -26,12 +26,12 @@ MKV_OUT_DIR="$SCRIPT_DIR/output"
 CLEAN="${CLEAN:-0}"
 
 # SUB_LANG=auto ./sub.sh → deteksi otomatis bahasa video
-# SUB_LANG=ja|zh|en      → paksa bahasa Jepang / China / Inggris
+# SUB_LANG=ja|zh|en|ko|th|tl|ru  → paksa bahasa sumber
 # LANG=ja ./sub.sh juga didukung, tapi LANG locale sistem tidak akan dipakai.
 SUBTITLE_LANG="${SUB_LANG:-${VIDEO_LANG:-}}"
 if [ -z "$SUBTITLE_LANG" ]; then
     case "${LANG:-}" in
-        auto|ja|zh|en) SUBTITLE_LANG="$LANG" ;;
+        auto|ja|zh|en|ko|th|tl|ru) SUBTITLE_LANG="$LANG" ;;
         *) SUBTITLE_LANG="auto" ;;
     esac
 fi
@@ -114,7 +114,7 @@ to_trash() {
 
 validate_lang() {
     case "$1" in
-        auto|ja|zh|en) return 0 ;;
+        auto|ja|zh|en|ko|th|tl|ru) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -125,6 +125,10 @@ lang_label() {
         ja) echo "Jepang" ;;
         zh) echo "China" ;;
         en) echo "Inggris" ;;
+        ko) echo "Korea" ;;
+        th) echo "Thailand" ;;
+        tl) echo "Filipina" ;;
+        ru) echo "Rusia" ;;
         *) echo "$1" ;;
     esac
 }
@@ -184,7 +188,114 @@ pause_and_ask() {
     done
 }
 
+# ─── Menu interaktif ────────────────────────────────────────────────────────────
+show_menu() {
+    echo ""
+    echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════╗${RESET}"
+    echo -e "${BOLD}${CYAN}║            PILIH MODE KERJA                      ║${RESET}"
+    echo -e "${BOLD}${CYAN}╠══════════════════════════════════════════════════╣${RESET}"
+    echo -e "${BOLD}${CYAN}║${RESET}  1) Subtitle SRT saja                       ${BOLD}${CYAN}║${RESET}"
+    echo -e "${BOLD}${CYAN}║${RESET}  2) SRT + Mux MKV (softsub)                 ${BOLD}${CYAN}║${RESET}"
+    echo -e "${BOLD}${CYAN}║${RESET}  3) SRT + MKV + Clean source                ${BOLD}${CYAN}║${RESET}"
+    echo -e "${BOLD}${CYAN}║${RESET}  4) Auto SRT saja (tanpa pause)             ${BOLD}${CYAN}║${RESET}"
+    echo -e "${BOLD}${CYAN}║${RESET}  5) Batch mux MKV (dari SRT yang sudah ada) ${BOLD}${CYAN}║${RESET}"
+    echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════╝${RESET}"
+    echo ""
+
+    while true; do
+        echo -ne "  Pilih [1-5]: "
+        read -r pilihan </dev/tty
+        case "$pilihan" in
+            1) MKV=0; CLEAN=0; AUTO=0; FROM_MENU=1; info "Mode: SRT saja"; break ;;
+            2) MKV=1; CLEAN=0; AUTO=0; FROM_MENU=1; info "Mode: SRT + MKV"; break ;;
+            3) MKV=1; CLEAN=1; AUTO=0; FROM_MENU=1; info "Mode: SRT + MKV + Clean"; break ;;
+            4) MKV=0; CLEAN=0; AUTO=1; FROM_MENU=1; info "Mode: Auto SRT (tanpa pause)"; break ;;
+            5) MODE_MUX_BATCH=1; break ;;
+            *) echo -e "  ${RED}Pilih 1-5${RESET}" ;;
+        esac
+    done
+}
+
+# ─── Batch mux MKV ──────────────────────────────────────────────────────────────
+batch_mux_mkv() {
+    local count=0
+    local -a cleaned_stems=()
+    mkdir -p "$MKV_OUT_DIR"
+    echo ""
+    info "Batch mux MKV dari SRT yang sudah ada di $SRT_OUTPUT_DIR"
+
+    while IFS= read -r -d '' srt_file; do
+        base="$(basename "$srt_file")"
+        stem="${base%_ID.srt}"
+        found_video=""
+        for ext in mp4 mkv avi mov webm flv; do
+            candidate="$VIDEO_DIR/$stem.$ext"
+            [ -f "$candidate" ] && { found_video="$candidate"; break; }
+        done
+
+        if [ -z "$found_video" ]; then
+            warn "Video tidak ditemukan untuk $stem — skip"
+            continue
+        fi
+
+        mkv_out="$MKV_OUT_DIR/$stem.mkv"
+        if [ -f "$mkv_out" ] && [ "$FORCE" != "1" ]; then
+            info "MKV sudah ada: $mkv_out (skip)"
+            continue
+        fi
+
+        run_with_spinner "Mux $stem" \
+            ffmpeg -y -i "$found_video" -i "$srt_file" \
+                -map 0:v -map 0:a -map 1 \
+                -c:v copy -c:a copy -c:s srt \
+                -metadata:s:2 language=ind -metadata:s:2 title="Indonesia" \
+                -disposition:s:2 default \
+                "$mkv_out"
+        if [ $? -eq 0 ] && [ -s "$mkv_out" ]; then
+            ok "MKV: $mkv_out"
+            cleaned_stems+=("$stem")
+            ((count++))
+        else
+            warn "Mux gagal untuk $stem"
+        fi
+    done < <(find "$SRT_OUTPUT_DIR" -maxdepth 1 -name "*_ID.srt" -print0 2>/dev/null | sort -z)
+
+    echo ""
+    if [ "$count" -eq 0 ]; then
+        warn "Tidak ada MKV yang dibuat."
+        return
+    fi
+
+    ok "Batch mux selesai: $count MKV."
+    echo ""
+    echo -ne "  Hapus video + SRT yang sudah di-mux? [${GREEN}y${RESET}/${RED}N${RESET}] "
+    read -r hapus </dev/tty
+    case "${hapus,,}" in
+        y|yes)
+            local cleaned=0
+            for stem in "${cleaned_stems[@]}"; do
+                for ext in mp4 mkv avi mov webm flv; do
+                    candidate="$VIDEO_DIR/$stem.$ext"
+                    [ -f "$candidate" ] && { to_trash "$candidate"; break; }
+                done
+                to_trash "$SRT_OUTPUT_DIR/${stem}_ID.srt"
+                ((cleaned++))
+            done
+            ok "Clean: $cleaned video + SRT dikirim ke trash."
+            ;;
+    esac
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ── Menu interaktif (kalau tidak ada env var mode yang diset) ──────────────
+if [ "$MKV" != "1" ] && [ "$CLEAN" != "1" ] && [ "$AUTO" != "1" ]; then
+    show_menu
+    if [ "${MODE_MUX_BATCH:-0}" = "1" ]; then
+        batch_mux_mkv
+        exit 0
+    fi
+fi
 
 print_header
 START_TIME=$SECONDS
@@ -204,6 +315,52 @@ if [ "${#VIDEO_LIST[@]}" -eq 0 ]; then
 fi
 
 echo -e "${BOLD}${BLUE}┌─ Ditemukan ${#VIDEO_LIST[@]} video${RESET}"
+
+# ── Filter video interaktif (hanya dari menu) ────────────────────────────
+if [ "${FROM_MENU:-0}" = "1" ]; then
+    echo ""
+    echo -e "  ${BOLD}Pilih video yang diproses:${RESET}"
+    for i in "${!VIDEO_LIST[@]}"; do
+        printf "  ${BOLD}%d${RESET}) %s\n" $((i + 1)) "$(basename "${VIDEO_LIST[$i]}")"
+    done
+    echo ""
+    echo -ne "  Nomor (contoh: 1,3,7 atau 1-5, kosong=semua): "
+    read -r selected </dev/tty
+
+    if [ -n "$selected" ]; then
+        filtered=()
+        IFS=',' read -ra parts <<< "$selected"
+        for part in "${parts[@]}"; do
+            part="${part// /}"
+            if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+                for ((i = ${BASH_REMATCH[1]}; i <= ${BASH_REMATCH[2]}; i++)); do
+                    idx=$((i - 1))
+                    [ "$idx" -ge 0 ] && [ "$idx" -lt "${#VIDEO_LIST[@]}" ] && filtered+=("${VIDEO_LIST[$idx]}")
+                done
+            elif [[ "$part" =~ ^[0-9]+$ ]]; then
+                idx=$((part - 1))
+                [ "$idx" -ge 0 ] && [ "$idx" -lt "${#VIDEO_LIST[@]}" ] && filtered+=("${VIDEO_LIST[$idx]}")
+            fi
+        done
+        # dedupe
+        VIDEO_LIST=()
+        for v in "${filtered[@]}"; do
+            seen=0
+            for existing in "${VIDEO_LIST[@]}"; do
+                [ "$existing" = "$v" ] && { seen=1; break; }
+            done
+            [ "$seen" = 0 ] && VIDEO_LIST+=("$v")
+        done
+        unset filtered
+
+        if [ "${#VIDEO_LIST[@]}" -eq 0 ]; then
+            fail "Tidak ada video yang dipilih."
+        fi
+        echo ""
+        info "Diproses: ${#VIDEO_LIST[@]} video"
+    fi
+fi
+
 info "Mode aman: 1 video selesai → pause untuk review."
 info "FORCE=$FORCE  |  AUTO=$AUTO  |  SUB_LANG=$(lang_label "$SUBTITLE_LANG")  |  MKV=$MKV  |  CLEAN=$CLEAN"
 

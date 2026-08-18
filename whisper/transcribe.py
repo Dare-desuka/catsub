@@ -88,12 +88,52 @@ LANG_CONFIGS = {
         "halluc_contains": gu.HALLUC_EN_CONTAINS,
         "char_re": re.compile(r'[a-zA-Z]'),
     },
+    "ko": {
+        "label": "한국어",
+        "whisper_lang": "ko",
+        "suffix": "_KO",
+        "fillers": set(),  # ponytail: kosong dulu, isi kalau ada pola desah
+        "halluc_exact": set(),
+        "halluc_contains": set(),
+        "char_re": re.compile(r'[\uac00-\ud7a3]'),
+    },
+    "th": {
+        "label": "ไทย",
+        "whisper_lang": "th",
+        "suffix": "_TH",
+        "fillers": set(),
+        "halluc_exact": set(),
+        "halluc_contains": set(),
+        "char_re": re.compile(r'[\u0e00-\u0e7f]'),
+    },
+    "tl": {
+        "label": "Filipino",
+        "whisper_lang": "tl",
+        "suffix": "_TL",
+        "fillers": set(),
+        "halluc_exact": set(),
+        "halluc_contains": set(),
+        "char_re": re.compile(r'[a-zA-ZñÑ]'),
+    },
+    "ru": {
+        "label": "Русский",
+        "whisper_lang": "ru",
+        "suffix": "_RU",
+        "fillers": set(),
+        "halluc_exact": set(),
+        "halluc_contains": set(),
+        "char_re": re.compile(r'[\u0400-\u04ff]'),
+    },
 }
 
 LANG_ALIASES = {
     "ja": "ja", "japanese": "ja", "japan": "ja", "\u65e5\u672c\u8a9e": "ja",
     "zh": "zh", "chinese": "zh", "mandarin": "zh", "\u4e2d\u6587": "zh", "cmn": "zh",
     "en": "en", "eng": "en", "english": "en",
+    "ko": "ko", "korean": "ko", "korea": "ko", "한국어": "ko",
+    "th": "th", "thai": "th", "thailand": "th", "ไทย": "th",
+    "tl": "tl", "fil": "tl", "filipino": "tl", "tagalog": "tl", "philippines": "tl",
+    "ru": "ru", "rus": "ru", "russian": "ru", "rusia": "ru", "русский": "ru",
 }
 
 
@@ -225,15 +265,15 @@ def is_hallucination(text: str, duration_sec: float, lang: str) -> tuple:
     for frag in cfg["halluc_contains"]:
         if frag in t:
             return True, f"contains hallucination: {frag!r}"
+    rep = gu.repeated_phrase(t)
+    if rep:
+        return True, f"frasa berulang: {rep[:30]!r}"
     if len(t) <= 2 and not cfg["char_re"].search(t):
         return True, f"terlalu pendek tanpa karakter {lang}: {t!r}"
-    if lang == "ja":
-        if gu.LATIN_FRAG_RE.match(t) and len(t) > 6:
-            return True, f"murni Latin/Cyrillic: {t!r}"
-        latin_words = gu.MIXED_JUNK_RE.findall(t)
-        jp_chars = cfg["char_re"].findall(t)
-        if latin_words and not jp_chars:
-            return True, f"kata Latin tanpa konteks JP: {latin_words}"
+    if lang != "en":
+        reason = gu.check_latin_junk(t, cfg["char_re"], lang)
+        if reason:
+            return True, reason
     if duration_sec >= 20.0 and len(t) <= 25:
         return True, f"teks pendek ({len(t)} char) di segment panjang ({duration_sec:.0f}s)"
     return False, ""
@@ -265,50 +305,34 @@ def deduplicate_blocks(blocks: list) -> list:
 
 def split_long_segments(blocks: list, lang: str, max_chars: int = 45) -> list:
     if lang == "ja":
-        split_re = re.compile(r'(?<=[\u3002\uff0c])\s*')
+        split_re = re.compile(r'(?<=[\u3002\u3001])')   # 。、
     elif lang == "zh":
-        split_re = re.compile(r'(?<=[\u3002\uff0c\uff0c])\s*')
+        split_re = re.compile(r'(?<=[\u3002\uff0c\u3001])')  # 。，、
     else:
         split_re = re.compile(r'(?<=[.!?])\s+')
     result = []
     for b in blocks:
         text = b["text"].strip()
         duration = b["end"] - b["start"]
-        words = b.get("words", [])
         sentences = [s.strip() for s in split_re.split(text) if s.strip()]
         if len(sentences) <= 1 or len(text) <= max_chars:
             result.append(b)
             continue
-        if not words or len(words) < len(sentences):
-            result.append(b)
-            continue
-        if duration < 0.8 * len(sentences):
-            result.append(b)
-            continue
-        n_words = len(words)
+        # ponytail: Groq tidak kirim word-timestamps → bagi durasi proporsional
+        # thd panjang karakter tiap kalimat. Approx, tapi jauh lebih baik dari
+        # blok panjang menempel.
         total_chars = sum(len(re.sub(r'\s+', '', s)) for s in sentences)
-        cursor_word = 0
+        if total_chars <= 0:
+            result.append(b)
+            continue
+        cursor = b["start"]
         for si, sent in enumerate(sentences):
             is_last = (si == len(sentences) - 1)
-            sent_len = len(re.sub(r'\s+', '', sent))
-            ratio = sent_len / total_chars if total_chars else 1 / len(sentences)
-            n_words_est = max(1, round(n_words * ratio))
-            if is_last:
-                sent_words = words[cursor_word:]
-            else:
-                end_idx = min(n_words, cursor_word + n_words_est)
-                sent_words = words[cursor_word:end_idx]
-                cursor_word = end_idx
-                if cursor_word >= n_words:
-                    cursor_word = n_words - 1
-            if sent_words:
-                start_ts = sent_words[0]["start"]
-                end_ts = sent_words[-1]["end"]
-            else:
-                start_ts = b["start"]
-                end_ts = b["end"]
-            result.append({"start": round(start_ts, 3), "end": round(end_ts, 3),
-                          "text": sent, "words": sent_words})
+            seg_dur = (duration * len(re.sub(r'\s+', '', sent)) / total_chars
+                       if not is_last else b["end"] - cursor)
+            end = cursor + seg_dur
+            result.append({"start": round(cursor, 3), "end": round(end, 3), "text": sent})
+            cursor = end
     return result
 
 
@@ -469,6 +493,8 @@ def detect_video_language(rotator: gu.KeyRotator, video_path: Path, duration: fl
     if duration > 180:
         starts.extend([duration * 0.25, duration * 0.5])
     print(f"   {gu.DM}Deteksi bahasa otomatis\u2026{gu.R}", flush=True)
+    votes = {}
+    reported_by_lang = {}
     with tempfile.TemporaryDirectory() as tmpdir:
         for idx, start_sec in enumerate(starts, start=1):
             start_sec = min(start_sec, max(0.0, duration - sample_duration))
@@ -477,13 +503,22 @@ def detect_video_language(rotator: gu.KeyRotator, video_path: Path, duration: fl
                 continue
             lang, text, reported = detect_language_from_audio(rotator, audio_path)
             audio_path.unlink(missing_ok=True)
-            if lang in LANG_CONFIGS:
-                cfg = LANG_CONFIGS[lang]
-                report = f", Whisper: {reported}" if reported else ""
-                print(f"   {gu.GR}\u2714  Bahasa terdeteksi: {cfg['label']}{gu.DM}{report}{gu.R}")
-                return lang
-            if text:
-                print(f"   {gu.YL}!  Sampel {idx} belum jelas, coba sampel lain\u2026{gu.R}")
+            if lang not in LANG_CONFIGS:
+                continue
+            # ponytail: sample tanpa signal ucapan (sunyi/halusinasi) jangan
+            # dipakai buat deteksi — salah bahasa = seluruh file salah.
+            if len(text.strip()) < 20 or is_hallucination(text, sample_duration, lang)[0] \
+                    or is_noise_segment(text, lang):
+                print(f"   {gu.YL}!  Sampel {idx} tanpa signal ucapan jelas, coba sampel lain\u2026{gu.R}")
+                continue
+            votes[lang] = votes.get(lang, 0) + 1
+            reported_by_lang.setdefault(lang, reported)
+    if votes:
+        best = max(votes, key=votes.get)
+        cfg = LANG_CONFIGS[best]
+        report = f", Whisper: {reported_by_lang[best]}" if reported_by_lang[best] else ""
+        print(f"   {gu.GR}\u2714  Bahasa terdeteksi: {cfg['label']}{gu.DM}{report}{gu.R}")
+        return best
     print(f"   {gu.YL}!  Bahasa tidak terdeteksi jelas, fallback ke Jepang.{gu.R}")
     return "ja"
 

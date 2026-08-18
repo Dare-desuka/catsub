@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Groq LLaMA Subtitle Translator — Multi-Language Input → Indonesia
+Groq Subtitle Translator (GPT-OSS 120B) — Multi-Language Input → Indonesia
 Input  : SRT dari Jepang (_JA) / China (_ZH) / Inggris (_EN)
 Output : SRT Indonesia (_ID)
 """
@@ -19,7 +19,7 @@ import groq_util as gu
 # ─────────────────────────────────────────────
 
 GROQ_API_KEYS = []
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
 BASE_DIR = Path(__file__).resolve().parent
 input_folder = str(BASE_DIR / "queue")
 output_folder = str(BASE_DIR / "subtitles")
@@ -59,8 +59,16 @@ Aturan WAJIB:
 11. Jika input berupa ekspresi pendek seperti あ, え, いや, うん, terjemahkan singkat:
     "Ah", "Eh", "Hah", "Iya", "Nggak", "...", atau "-" sesuai konteks.
 12. Jangan pernah mengosongkan terjemahan setelah ID.
-13. Kalau nama orang, tempat, merek, atau kode tidak perlu diterjemahkan, pertahankan.
-14. Utamakan hasil terjemahan yang alami dan enak dibaca dalam Bahasa Indonesia, jangan terjemahkan kata per kata secara kaku.
+13. Erangan, desahan, dan onomatopoeia (mis. ああ, うん, いくいく, メルメル, チー) terjemahkan
+    ke padanan Indonesia singkat ("Ah", "Hmm", "...", "-") atau buang — JANGAN tulis ulang
+    dalam romaji (mis. jangan jadi "Ikkui", "Merumeru", "Aik").
+14. Yang dipertahankan apa adanya hanya nama orang/tempat/merek/kode asli; onomatope dan erangan
+    BUKAN merek, jadi tetap harus diterjemahkan/dibuang.
+15. Kalau nama orang, tempat, merek, atau kode tidak perlu diterjemahkan, pertahankan.
+16. Utamakan hasil terjemahan yang alami dan enak dibaca dalam Bahasa Indonesia, jangan terjemahkan kata per kata secara kaku.
+
+Glossary wajib (konsisten, jangan ganti-ganti):
+- オシュレット / オシュレト → bidet (semprot toilet)
 """,
         "user_header": lambda n, ids: (
             f"Terjemahkan subtitle berikut dari Bahasa Jepang ke Bahasa Indonesia.\n\n"
@@ -162,6 +170,170 @@ Aturan WAJIB:
             "- Jangan kosongkan isi terjemahan.\n"
         ),
     },
+    "ko": {
+        "label": "Korea",
+        "suffix_in": "_KO", "suffix_out": "_ID",
+        "check_src_chars": False,
+        "src_char_re": re.compile(r"[\uac00-\ud7a3]"),
+        "halluc_exact": set(),  # ponytail: kosong dulu
+        "halluc_contains": set(),
+        "system": """Kamu adalah penerjemah subtitle profesional dari Bahasa Korea ke Bahasa Indonesia.
+
+Aturan WAJIB:
+1. Terjemahkan subtitle Korea ke Bahasa Indonesia yang natural dan enak dibaca.
+2. Pertahankan makna, konteks, nada bicara, dan emosi.
+3. Jangan membuat ringkasan.
+4. Jangan menambah informasi baru.
+5. Jangan menghapus baris.
+6. Jangan menggabungkan dua ID menjadi satu.
+7. Jangan memecah satu ID menjadi beberapa ID.
+8. Output HARUS memakai format yang sama:
+   [001] terjemahan
+   [002] terjemahan
+9. Semua ID input HARUS muncul di output.
+10. Jangan tulis penjelasan, catatan, markdown, atau komentar.
+11. Jika input berupa ekspresi pendek, terjemahkan singkat dan natural sesuai konteks.
+12. Jangan pernah mengosongkan terjemahan setelah ID.
+13. Kalau nama orang, tempat, merek, atau kode tidak perlu diterjemahkan, pertahankan.
+14. Utamakan hasil terjemahan yang alami dan enak dibaca dalam Bahasa Indonesia, jangan terjemahkan kata per kata secara kaku.
+""",
+        "user_header": lambda n, ids: (
+            f"Terjemahkan subtitle berikut dari Bahasa Korea ke Bahasa Indonesia.\n\n"
+            f"Jumlah item: {n}\nID yang wajib ada: {ids}"
+        ),
+        "user_rules": (
+            "- Output hanya terjemahan.\n"
+            "- Format wajib: [ID] terjemahan\n"
+            "- Semua ID wajib muncul.\n"
+            "- Urutan ID wajib sama.\n"
+            "- Jangan gabungkan ID.\n"
+            "- Jangan hapus ID.\n"
+            "- Jangan kosongkan isi terjemahan.\n"
+        ),
+    },
+    "th": {
+        "label": "Thailand",
+        "suffix_in": "_TH", "suffix_out": "_ID",
+        "check_src_chars": False,
+        "src_char_re": re.compile(r"[\u0e00-\u0e7f]"),
+        "halluc_exact": set(),
+        "halluc_contains": set(),
+        "system": """Kamu adalah penerjemah subtitle profesional dari Bahasa Thailand ke Bahasa Indonesia.
+
+Aturan WAJIB:
+1. Terjemahkan subtitle Thailand ke Bahasa Indonesia yang natural dan enak dibaca.
+2. Pertahankan makna, konteks, nada bicara, dan emosi.
+3. Jangan membuat ringkasan.
+4. Jangan menambah informasi baru.
+5. Jangan menghapus baris.
+6. Jangan menggabungkan dua ID menjadi satu.
+7. Jangan memecah satu ID menjadi beberapa ID.
+8. Output HARUS memakai format yang sama:
+   [001] terjemahan
+   [002] terjemahan
+9. Semua ID input HARUS muncul di output.
+10. Jangan tulis penjelasan, catatan, markdown, atau komentar.
+11. Jika input berupa ekspresi pendek, terjemahkan singkat dan natural sesuai konteks.
+12. Jangan pernah mengosongkan terjemahan setelah ID.
+13. Kalau nama orang, tempat, merek, atau kode tidak perlu diterjemahkan, pertahankan.
+14. Utamakan hasil terjemahan yang alami dan enak dibaca dalam Bahasa Indonesia, jangan terjemahkan kata per kata secara kaku.
+""",
+        "user_header": lambda n, ids: (
+            f"Terjemahkan subtitle berikut dari Bahasa Thailand ke Bahasa Indonesia.\n\n"
+            f"Jumlah item: {n}\nID yang wajib ada: {ids}"
+        ),
+        "user_rules": (
+            "- Output hanya terjemahan.\n"
+            "- Format wajib: [ID] terjemahan\n"
+            "- Semua ID wajib muncul.\n"
+            "- Urutan ID wajib sama.\n"
+            "- Jangan gabungkan ID.\n"
+            "- Jangan hapus ID.\n"
+            "- Jangan kosongkan isi terjemahan.\n"
+        ),
+    },
+    "tl": {
+        "label": "Filipina",
+        "suffix_in": "_TL", "suffix_out": "_ID",
+        "check_src_chars": False,
+        "src_char_re": re.compile(r"[a-zA-ZñÑ]"),
+        "halluc_exact": set(),
+        "halluc_contains": set(),
+        "system": """Kamu adalah penerjemah subtitle profesional dari Bahasa Filipina (Tagalog) ke Bahasa Indonesia.
+
+Aturan WAJIB:
+1. Terjemahkan subtitle Filipina ke Bahasa Indonesia yang natural dan enak dibaca.
+2. Pertahankan makna, konteks, nada bicara, dan emosi.
+3. Jangan membuat ringkasan.
+4. Jangan menambah informasi baru.
+5. Jangan menghapus baris.
+6. Jangan menggabungkan dua ID menjadi satu.
+7. Jangan memecah satu ID menjadi beberapa ID.
+8. Output HARUS memakai format yang sama:
+   [001] terjemahan
+   [002] terjemahan
+9. Semua ID input HARUS muncul di output.
+10. Jangan tulis penjelasan, catatan, markdown, atau komentar.
+11. Jika input berupa ekspresi pendek, terjemahkan singkat dan natural sesuai konteks.
+12. Jangan pernah mengosongkan terjemahan setelah ID.
+13. Kalau nama orang, tempat, merek, atau kode tidak perlu diterjemahkan, pertahankan.
+14. Utamakan hasil terjemahan yang alami dan enak dibaca dalam Bahasa Indonesia, jangan terjemahkan kata per kata secara kaku.
+""",
+        "user_header": lambda n, ids: (
+            f"Terjemahkan subtitle berikut dari Bahasa Filipina ke Bahasa Indonesia.\n\n"
+            f"Jumlah item: {n}\nID yang wajib ada: {ids}"
+        ),
+        "user_rules": (
+            "- Output hanya terjemahan.\n"
+            "- Format wajib: [ID] terjemahan\n"
+            "- Semua ID wajib muncul.\n"
+            "- Urutan ID wajib sama.\n"
+            "- Jangan gabungkan ID.\n"
+            "- Jangan hapus ID.\n"
+            "- Jangan kosongkan isi terjemahan.\n"
+        ),
+    },
+    "ru": {
+        "label": "Rusia",
+        "suffix_in": "_RU", "suffix_out": "_ID",
+        "check_src_chars": False,
+        "src_char_re": re.compile(r"[\u0400-\u04ff]"),
+        "halluc_exact": set(),
+        "halluc_contains": set(),
+        "system": """Kamu adalah penerjemah subtitle profesional dari Bahasa Rusia ke Bahasa Indonesia.
+
+Aturan WAJIB:
+1. Terjemahkan subtitle Rusia ke Bahasa Indonesia yang natural dan enak dibaca.
+2. Pertahankan makna, konteks, nada bicara, dan emosi.
+3. Jangan membuat ringkasan.
+4. Jangan menambah informasi baru.
+5. Jangan menghapus baris.
+6. Jangan menggabungkan dua ID menjadi satu.
+7. Jangan memecah satu ID menjadi beberapa ID.
+8. Output HARUS memakai format yang sama:
+   [001] terjemahan
+   [002] terjemahan
+9. Semua ID input HARUS muncul di output.
+10. Jangan tulis penjelasan, catatan, markdown, atau komentar.
+11. Jika input berupa ekspresi pendek, terjemahkan singkat dan natural sesuai konteks.
+12. Jangan pernah mengosongkan terjemahan setelah ID.
+13. Kalau nama orang, tempat, merek, atau kode tidak perlu diterjemahkan, pertahankan.
+14. Utamakan hasil terjemahan yang alami dan enak dibaca dalam Bahasa Indonesia, jangan terjemahkan kata per kata secara kaku.
+""",
+        "user_header": lambda n, ids: (
+            f"Terjemahkan subtitle berikut dari Bahasa Rusia ke Bahasa Indonesia.\n\n"
+            f"Jumlah item: {n}\nID yang wajib ada: {ids}"
+        ),
+        "user_rules": (
+            "- Output hanya terjemahan.\n"
+            "- Format wajib: [ID] terjemahan\n"
+            "- Semua ID wajib muncul.\n"
+            "- Urutan ID wajib sama.\n"
+            "- Jangan gabungkan ID.\n"
+            "- Jangan hapus ID.\n"
+            "- Jangan kosongkan isi terjemahan.\n"
+        ),
+    },
 }
 
 
@@ -173,7 +345,7 @@ def banner(rotator: gu.KeyRotator, src_lang: str):
     cfg = SRC_LANG_CONFIGS[src_lang]
     print(f"""
 {gu.CY}{gu.B}╔══════════════════════════════════════════════╗
-║  🌐  Groq LLaMA Subtitle Translator         ║
+║  🌐  Groq Subtitle Translator (GPT-OSS)   ║
 ║  Model  : {MODEL:<33}║
 ║  Input  : {cfg['label']} → Indonesia           ║
 ║  Keys   : {len(rotator):<2} akun                          ║
@@ -222,15 +394,15 @@ def is_hallucination(text: str, duration_sec: float, src_lang: str) -> tuple:
     for frag in cfg["halluc_contains"]:
         if frag in t:
             return True, f"contains hallucination: {frag!r}"
-    if len(t) <= 2:
-        return True, f"terlalu pendek: {t!r}"
-    if src_lang == "ja":
-        if gu.LATIN_FRAG_RE.match(t) and len(t) > 6:
-            return True, f"murni Latin/Cyrillic: {t!r}"
-        latin_words = gu.MIXED_JUNK_RE.findall(t)
-        jp_chars = gu.JP_CHAR_RE.findall(t)
-        if latin_words and not jp_chars:
-            return True, f"kata Latin tanpa konteks JP: {latin_words}"
+    rep = gu.repeated_phrase(t)
+    if rep:
+        return True, f"frasa berulang: {rep[:30]!r}"
+    if len(t) <= 2 and not cfg["src_char_re"].search(t):
+        return True, f"terlalu pendek tanpa karakter {cfg['label']}: {t!r}"
+    if src_lang != "en":
+        reason = gu.check_latin_junk(t, cfg["src_char_re"], src_lang)
+        if reason:
+            return True, reason
     if duration_sec >= 20.0 and len(t) <= 25:
         return True, f"teks pendek ({len(t)} char) di segment panjang ({duration_sec:.0f}s)"
     return False, ""
@@ -391,11 +563,103 @@ def translate_batch(rotator: gu.KeyRotator, texts, global_start_index, src_lang:
 
 
 # ─────────────────────────────────────────────
+#  PROOFREAD PASS (QA konteks)
+# ─────────────────────────────────────────────
+
+PROOFREAD_CHUNK = 100
+PROOFREAD_OVERLAP = 5
+
+PROOFREAD_SYSTEM = """Kamu adalah editor subtitle Indonesia yang memeriksa kualitas terjemahan.
+
+Aturan WAJIB:
+1. Baca semua baris secara berurutan sebagai satu alur adegan.
+2. Perbaiki baris yang:
+   - tidak masuk akal atau tidak nyambung dengan baris di sekitarnya,
+   - masih mengandung kata asing / bahasa sumber,
+   - hasil salah dengar / salah terjemah yang bisa ditebak dari konteks.
+3. Baris yang sudah benar TULIS ULANG PERSIS SAMA, jangan diubah.
+4. Jangan menambah, menghapus, atau menggabungkan baris.
+5. Jangan tulis penjelasan atau komentar.
+6. Output HARUS format: [ID] teks
+7. Semua ID input WAJIB muncul di output."""
+
+
+def _words(t: str) -> set:
+    return set(re.findall(r"[A-Za-z0-9]+", t.lower()))
+
+
+def is_drastic_change(old: str, new: str) -> bool:
+    """Perubahan besar = sebagian besar kata sumber hilang/ganti. Indikator
+    garble/halusinasi yang diperbaiki konteks, bukan sekadar normalisasi gaya.
+    Baris pendek (<6 char) diabaikan — ganti satu-dua kata bukan pola garble."""
+    if old == new:
+        return False
+    if len(old.strip()) < 6:
+        return False
+    o = _words(old)
+    if not o:
+        return True
+    return len(o & _words(new)) / len(o) < 0.4
+
+
+def proofread_srt(rotator: gu.KeyRotator, blocks: list) -> int:
+    if not blocks:
+        return 0
+    step = PROOFREAD_CHUNK - PROOFREAD_OVERLAP
+    chunks = [blocks[s:s + PROOFREAD_CHUNK] for s in range(0, len(blocks), step)]
+    changed = 0
+    candidates = []
+    for ci, chunk in enumerate(chunks):
+        items = [{"id": i + 1, "text": b["text"]} for i, b in enumerate(chunk)]
+        lines = "\n".join(
+            f"[{it['id']:03d}] {it['text'].replace(chr(10), ' ').strip()}" for it in items
+        )
+        ids_text = ", ".join(f"[{x['id']:03d}]" for x in items)
+        messages = [
+            {"role": "system", "content": PROOFREAD_SYSTEM},
+            {"role": "user", "content": (
+                f"Periksa dan perbaiki subtitle Indonesia berikut "
+                f"(chunk {ci+1}/{len(chunks)}).\n"
+                f"Jumlah item: {len(items)}\n"
+                f"ID yang wajib ada: {ids_text}\n\n"
+                f"Input:\n{lines}\n"
+            )},
+        ]
+        parsed = None
+        for _ in range(2):
+            raw = groq_request(rotator, messages)
+            if not raw:
+                break
+            parsed = parse_id_output(raw, list(range(1, len(items) + 1)))
+            if parsed is not None:
+                break
+            time.sleep(1)
+        if parsed is None:
+            print(f"\n   {gu.YL}!  Proofread chunk {ci+1}: parse gagal, chunk dibiarkan.{gu.R}")
+            continue
+        for i, newtext in enumerate(parsed):
+            old = chunk[i]["text"]
+            if old != newtext:
+                if is_drastic_change(old, newtext):
+                    candidates.append((chunk[i]["start"], old, newtext))
+                chunk[i]["text"] = newtext
+                changed += 1
+    if candidates:
+        print(f"\n   {gu.CY}Kandidat perubahan drastis ({len(candidates)}):{gu.R}")
+        print(f"   {gu.DM}periksa pola garble/halusinasi baru; tambah ke frasa kalau perlu.{gu.R}")
+        for start, old, new in candidates[:10]:
+            print(f"      {start}  {old[:50]!r} \u2192 {new[:50]!r}")
+        if len(candidates) > 10:
+            print(f"      ... dan {len(candidates)-10} lainnya")
+    return changed
+
+
+# ─────────────────────────────────────────────
 #  TRANSLATE FILE
 # ─────────────────────────────────────────────
 
 def translate_file(rotator: gu.KeyRotator, input_path: Path, output_path: Path,
-                   src_lang: str) -> dict:
+                   src_lang: str, proofread: bool = True) -> dict:
     cfg = SRC_LANG_CONFIGS[src_lang]
     blocks = parse_srt(input_path)
     if not blocks:
@@ -419,17 +683,20 @@ def translate_file(rotator: gu.KeyRotator, input_path: Path, output_path: Path,
     blocks = clean_blocks
     total = len(blocks)
 
-    # ponytail: resume — pakai terjemahan lama yg valid, cuma terjemah yg gagal/marker.
+    # ponytail: resume — reuse terjemahan lama yg valid, cuma terjemah yg gagal/baru.
+    # Key = start timestamp (stabil), BUKAN index: output SRT di-renumber 1..N setiap
+    # tulis, jadi index output tak sejajar dgn index input saat ada blok dibuang
+    # (halusinasi) — pakai index menyebabkan reuse salah blok setelah gap pertama.
     prev = {}
     if output_path.exists():
         for pb in parse_srt(output_path):
             if not str(pb["text"]).startswith("[BELUM_DITERJEMAHKAN]"):
-                prev[pb["index"]] = pb["text"]
+                prev[pb["start"]] = pb["text"]
 
     texts, need_idx = [], []
     for i, b in enumerate(blocks):
-        if b["index"] in prev:
-            texts.append(prev[b["index"]])   # reuse hasil lama yg valid
+        if b["start"] in prev:
+            texts.append(prev[b["start"]])   # reuse hasil lama yg valid
         else:
             texts.append(b["text"])
             need_idx.append(i)
@@ -473,6 +740,15 @@ def translate_file(rotator: gu.KeyRotator, input_path: Path, output_path: Path,
             print(f"   {gu.YL}!  Masih ada {src_chars_left} blok mengandung karakter {label}.{gu.R}")
             for b in left[:15]:
                 print(f"      #{b['index']}: {b['text'][:90].replace(chr(10),' ')}")
+    if proofread and not failed_marked:
+        print(f"\n   {gu.CY}QA proofread (scan konteks & perbaiki baris tak nyambung)...{gu.R}")
+        t0 = time.time()
+        chg = proofread_srt(rotator, blocks)
+        if chg:
+            gu.write_srt(blocks, output_path)
+            print(f"   {gu.YL}!  {chg} baris diperbaiki proofread  {gu.fmt_dur(time.time()-t0)}{gu.R}")
+        else:
+            print(f"   {gu.DM}  Tidak ada baris yang diubah.  {gu.fmt_dur(time.time()-t0)}{gu.R}")
     return {"total": total, "failed_marked": failed_marked, "src_chars_left": src_chars_left}
 
 
@@ -493,6 +769,10 @@ def main():
     )
     parser.add_argument("--force", action="store_true",
                         help="Paksa translate ulang walau output sudah ada")
+    parser.add_argument("--no-proofread", action="store_true",
+                        help="Lewati QA proofread setelah translate")
+    parser.add_argument("--proofread", action="store_true",
+                        help="Mode QA: proofread file *_ID.srt yang sudah ada, tulis ulang di tempat")
     args = parser.parse_args()
     src_lang = args.lang.strip().lower()
     if src_lang not in SRC_LANG_CONFIGS:
@@ -510,6 +790,23 @@ def main():
     Path(input_folder).mkdir(parents=True, exist_ok=True)
     Path(output_folder).mkdir(parents=True, exist_ok=True)
     banner(rotator, src_lang)
+    if args.proofread:
+        fp = Path(args.input).expanduser().resolve()
+        if not fp.exists():
+            print(f"{gu.RD}x  File SRT tidak ditemukan: {fp}{gu.R}")
+            return 1
+        blocks = parse_srt(fp)
+        if not blocks:
+            print(f"{gu.RD}x  File kosong atau format tidak valid: {fp}{gu.R}")
+            return 1
+        print(f"{gu.CY}  QA proofread: {fp.name}{gu.R}  ({len(blocks)} baris)")
+        chg = proofread_srt(rotator, blocks)
+        if chg:
+            gu.write_srt(blocks, fp)
+            print(f"{gu.GR}\u2714  {chg} baris diperbaiki, file ditulis ulang.{gu.R}")
+        else:
+            print(f"{gu.DM}  Tidak ada baris yang diubah.{gu.R}")
+        return 0
     print(f"{gu.CY}  Urutan pemakaian key:{gu.R}")
     for i in range(len(rotator)):
         print(f"   {i+1}. {rotator.short_key(i)}")
@@ -543,7 +840,7 @@ def main():
               f"{gu.DM}({fp.stat().st_size/1024:.1f} KB){gu.R}")
         t0 = time.time()
         try:
-            info = translate_file(rotator, fp, out, src_lang)
+            info = translate_file(rotator, fp, out, src_lang, proofread=not args.no_proofread)
         except gu.AllKeysExhausted:
             return 1
         except Exception as e:
@@ -585,7 +882,7 @@ def main():
               f"{gu.DM}({fp.stat().st_size/1024:.1f} KB){gu.R}")
         t0 = time.time()
         try:
-            info = translate_file(rotator, fp, out, src_lang)
+            info = translate_file(rotator, fp, out, src_lang, proofread=not args.no_proofread)
             success += 1
             print(f"   {gu.GR}\u2714  Selesai{gu.R}  {info['total']} baris  {gu.fmt_dur(time.time()-t0)}")
             print(f"   Output: {gu.CY}{out}{gu.R}")
