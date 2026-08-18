@@ -765,7 +765,7 @@ def main():
     parser.add_argument("--output", help="Path output *_ID.srt untuk mode --input")
     parser.add_argument(
         "--lang", default="ja",
-        help="Bahasa sumber SRT: ja (Jepang) | zh (China) | en (Inggris)  [default: ja]",
+        help="Bahasa sumber SRT: ja|zh|en|ko|th|tl|ru  [default: ja]",
     )
     parser.add_argument("--force", action="store_true",
                         help="Paksa translate ulang walau output sudah ada")
@@ -774,11 +774,6 @@ def main():
     parser.add_argument("--proofread", action="store_true",
                         help="Mode QA: proofread file *_ID.srt yang sudah ada, tulis ulang di tempat")
     args = parser.parse_args()
-    src_lang = args.lang.strip().lower()
-    if src_lang not in SRC_LANG_CONFIGS:
-        print(f"{gu.RD}x  --lang tidak valid: '{src_lang}'. Pilih: ja | zh | en{gu.R}")
-        return 1
-    cfg_src = SRC_LANG_CONFIGS[src_lang]
     GROQ_API_KEYS = gu.load_groq_api_keys()
     valid_keys = [k.strip() for k in GROQ_API_KEYS if gu.valid_key(k)]
     if not valid_keys:
@@ -787,9 +782,9 @@ def main():
     GROQ_API_KEYS.clear()
     GROQ_API_KEYS.extend(valid_keys)
     rotator = gu.KeyRotator(GROQ_API_KEYS)
-    Path(input_folder).mkdir(parents=True, exist_ok=True)
-    Path(output_folder).mkdir(parents=True, exist_ok=True)
-    banner(rotator, src_lang)
+
+    # ponytail: proofread generik (tidak butuh bahasa sumber) → jalan sebelum
+    # validasi --lang supaya bisa: srt.py --proofread --input x_ID.srt
     if args.proofread:
         fp = Path(args.input).expanduser().resolve()
         if not fp.exists():
@@ -807,6 +802,15 @@ def main():
         else:
             print(f"{gu.DM}  Tidak ada baris yang diubah.{gu.R}")
         return 0
+
+    src_lang = args.lang.strip().lower()
+    if src_lang not in SRC_LANG_CONFIGS:
+        print(f"{gu.RD}x  --lang tidak valid: '{src_lang}'. Pilih: ja | zh | en | ko | th | tl | ru{gu.R}")
+        return 1
+    cfg_src = SRC_LANG_CONFIGS[src_lang]
+    Path(input_folder).mkdir(parents=True, exist_ok=True)
+    Path(output_folder).mkdir(parents=True, exist_ok=True)
+    banner(rotator, src_lang)
     print(f"{gu.CY}  Urutan pemakaian key:{gu.R}")
     for i in range(len(rotator)):
         print(f"   {i+1}. {rotator.short_key(i)}")

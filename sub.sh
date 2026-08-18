@@ -198,33 +198,102 @@ show_menu() {
     echo -e "${BOLD}${CYAN}║${RESET}  2) SRT + Mux MKV (softsub)                 ${BOLD}${CYAN}║${RESET}"
     echo -e "${BOLD}${CYAN}║${RESET}  3) SRT + MKV + Clean source                ${BOLD}${CYAN}║${RESET}"
     echo -e "${BOLD}${CYAN}║${RESET}  4) Auto SRT saja (tanpa pause)             ${BOLD}${CYAN}║${RESET}"
-    echo -e "${BOLD}${CYAN}║${RESET}  5) Batch mux MKV (dari SRT yang sudah ada) ${BOLD}${CYAN}║${RESET}"
+    echo -e "${BOLD}${CYAN}║${RESET}  5) Mux MKV saja (pilih SRT)                ${BOLD}${CYAN}║${RESET}"
+    echo -e "${BOLD}${CYAN}║${RESET}  6) Scan konteks (QA proofread)             ${BOLD}${CYAN}║${RESET}"
     echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════╝${RESET}"
     echo ""
 
     while true; do
-        echo -ne "  Pilih [1-5]: "
+        echo -ne "  Pilih [1-6]: "
         read -r pilihan </dev/tty
         case "$pilihan" in
             1) MKV=0; CLEAN=0; AUTO=0; FROM_MENU=1; info "Mode: SRT saja"; break ;;
             2) MKV=1; CLEAN=0; AUTO=0; FROM_MENU=1; info "Mode: SRT + MKV"; break ;;
             3) MKV=1; CLEAN=1; AUTO=0; FROM_MENU=1; info "Mode: SRT + MKV + Clean"; break ;;
             4) MKV=0; CLEAN=0; AUTO=1; FROM_MENU=1; info "Mode: Auto SRT (tanpa pause)"; break ;;
-            5) MODE_MUX_BATCH=1; break ;;
-            *) echo -e "  ${RED}Pilih 1-5${RESET}" ;;
+            5) MODE_MUX_SELECT=1; break ;;
+            6) MODE_SCAN_CONTEXT=1; break ;;
+            *) echo -e "  ${RED}Pilih 1-6${RESET}" ;;
         esac
     done
 }
 
-# ─── Batch mux MKV ──────────────────────────────────────────────────────────────
-batch_mux_mkv() {
+# ─── Pilih SRT *_ID.srt (dipakai mux & scan konteks) ───────────────────────────
+# ponytail: parser pilihan 1,3,7 / 1-5 / kosong=semua di-dup kecil dari filter
+# video — array beda, ekstrak helper umum kalau nanti dipakai >2x.
+select_srt_files() {
+    local -a srt_list=()
+    while IFS= read -r -d '' f; do
+        srt_list+=("$f")
+    done < <(find "$SRT_OUTPUT_DIR" -maxdepth 1 -name "*_ID.srt" -print0 2>/dev/null | sort -z)
+
+    if [ "${#srt_list[@]}" -eq 0 ]; then
+        warn "Tidak ada *_ID.srt di $SRT_OUTPUT_DIR"
+        return 1
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}Pilih SRT:${RESET}"
+    local i
+    for i in "${!srt_list[@]}"; do
+        local base stem status has_video ext
+        base="$(basename "${srt_list[$i]}")"
+        stem="${base%_ID.srt}"
+        status=""
+        has_video=""
+        for ext in mp4 mkv avi mov webm flv; do
+            [ -f "$VIDEO_DIR/$stem.$ext" ] && { has_video=1; break; }
+        done
+        if [ -n "$has_video" ]; then
+            status="  ${GREEN}✓ video ada${RESET}"
+        else
+            status="  ${RED}✗ video tidak ada${RESET}"
+        fi
+        [ -f "$MKV_OUT_DIR/$stem.mkv" ] && status+="  ${DIM}MKV sudah ada${RESET}"
+        printf "  ${BOLD}%d${RESET}) %s%s\n" $((i + 1)) "$base" "$status"
+    done
+    echo ""
+    echo -ne "  Nomor (contoh: 1,3,7 atau 1-5, kosong=semua): "
+    read -r selected </dev/tty
+
+    local -a chosen=()
+    if [ -n "$selected" ]; then
+        local part idx
+        IFS=',' read -ra parts <<< "$selected"
+        for part in "${parts[@]}"; do
+            part="${part// /}"
+            if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+                local a=${BASH_REMATCH[1]} b=${BASH_REMATCH[2]}
+                for ((i = a; i <= b; i++)); do
+                    idx=$((i - 1))
+                    [ "$idx" -ge 0 ] && [ "$idx" -lt "${#srt_list[@]}" ] && chosen+=("${srt_list[$idx]}")
+                done
+            elif [[ "$part" =~ ^[0-9]+$ ]]; then
+                idx=$((part - 1))
+                [ "$idx" -ge 0 ] && [ "$idx" -lt "${#srt_list[@]}" ] && chosen+=("${srt_list[$idx]}")
+            fi
+        done
+    else
+        chosen=("${srt_list[@]}")
+    fi
+
+    if [ "${#chosen[@]}" -eq 0 ]; then
+        warn "Tidak ada SRT yang dipilih."
+        return 1
+    fi
+    SELECTED_SRTS=("${chosen[@]}")
+    return 0
+}
+
+# ─── Mux MKV softsub dari SRT pilihan ───────────────────────────────────────────
+mux_selected() {
+    select_srt_files || return 0
+    mkdir -p "$MKV_OUT_DIR"
     local count=0
     local -a cleaned_stems=()
-    mkdir -p "$MKV_OUT_DIR"
-    echo ""
-    info "Batch mux MKV dari SRT yang sudah ada di $SRT_OUTPUT_DIR"
-
-    while IFS= read -r -d '' srt_file; do
+    local srt_file
+    for srt_file in "${SELECTED_SRTS[@]}"; do
+        local base stem found_video ext
         base="$(basename "$srt_file")"
         stem="${base%_ID.srt}"
         found_video=""
@@ -238,7 +307,7 @@ batch_mux_mkv() {
             continue
         fi
 
-        mkv_out="$MKV_OUT_DIR/$stem.mkv"
+        local mkv_out="$MKV_OUT_DIR/$stem.mkv"
         if [ -f "$mkv_out" ] && [ "$FORCE" != "1" ]; then
             info "MKV sudah ada: $mkv_out (skip)"
             continue
@@ -258,7 +327,7 @@ batch_mux_mkv() {
         else
             warn "Mux gagal untuk $stem"
         fi
-    done < <(find "$SRT_OUTPUT_DIR" -maxdepth 1 -name "*_ID.srt" -print0 2>/dev/null | sort -z)
+    done
 
     echo ""
     if [ "$count" -eq 0 ]; then
@@ -266,14 +335,15 @@ batch_mux_mkv() {
         return
     fi
 
-    ok "Batch mux selesai: $count MKV."
+    ok "Mux selesai: $count MKV."
     echo ""
     echo -ne "  Hapus video + SRT yang sudah di-mux? [${GREEN}y${RESET}/${RED}N${RESET}] "
     read -r hapus </dev/tty
     case "${hapus,,}" in
         y|yes)
-            local cleaned=0
+            local cleaned=0 stem
             for stem in "${cleaned_stems[@]}"; do
+                local ext
                 for ext in mp4 mkv avi mov webm flv; do
                     candidate="$VIDEO_DIR/$stem.$ext"
                     [ -f "$candidate" ] && { to_trash "$candidate"; break; }
@@ -286,13 +356,28 @@ batch_mux_mkv() {
     esac
 }
 
+# ─── Scan konteks (QA proofread) SRT pilihan ───────────────────────────────────
+scan_context() {
+    select_srt_files || return 0
+    local srt_file
+    for srt_file in "${SELECTED_SRTS[@]}"; do
+        info "Scan konteks: $(basename "$srt_file")"
+        run_with_spinner "Proofread $(basename "$srt_file")" \
+            run_in_venv "$SRT_DIR" python3 srt.py --proofread --input "$srt_file"
+    done
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Menu interaktif (kalau tidak ada env var mode yang diset) ──────────────
 if [ "$MKV" != "1" ] && [ "$CLEAN" != "1" ] && [ "$AUTO" != "1" ]; then
     show_menu
-    if [ "${MODE_MUX_BATCH:-0}" = "1" ]; then
-        batch_mux_mkv
+    if [ "${MODE_MUX_SELECT:-0}" = "1" ]; then
+        mux_selected
+        exit 0
+    fi
+    if [ "${MODE_SCAN_CONTEXT:-0}" = "1" ]; then
+        scan_context
         exit 0
     fi
 fi
