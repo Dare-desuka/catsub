@@ -61,6 +61,12 @@ LANG_CONFIGS = {
         "halluc_exact": gu.HALLUC_JA_EXACT,
         "halluc_contains": gu.HALLUC_JA_CONTAINS,
         "char_re": re.compile(r'[\u3040-\u309f\u30a0-\u30ff\u3400-\u9fff\uff00-\uffef]'),
+        # ponytail: initial_prompt sbg bias ejaan — kata yang sering salah dengar
+        # (homofon/dominan adegan dewasa). Whisper pakai ini buat "mengeja" vocab
+        # yang jarang, bukan cuma konteks. <=224 token.
+        "prompt": ("チンポ ちんぽ チンコ ちんこ おちんちん おちんちん ペニス "
+                   "おまんこ まんこ オシュレット オシュレト イク いくいく メルメル "
+                   "うん ああ はぁ んっ ふぅ いいよ きもちいい いっちゃう"),
     },
     "zh": {
         "label": "\u4e2d\u6587",
@@ -279,6 +285,22 @@ def is_hallucination(text: str, duration_sec: float, lang: str) -> tuple:
     return False, ""
 
 
+def is_low_confidence(block: dict) -> tuple:
+    """Sinyal confidence internal Whisper dari verbose_json. Ini VAD + halusinasi
+    detection Whisper sendiri: no_speech_prob tinggi + logprob rendah = segment
+    tidak ada ucapan (musik/desahan/diam) yang diisi narasi halusinasi.
+    Threshold = default OpenAI whisper decode (no_speech_threshold=0.6,
+    logprob_threshold=-1.0, compression_ratio_threshold=2.4)."""
+    nsp = block.get("no_speech_prob")
+    alp = block.get("avg_logprob")
+    cr = block.get("compression_ratio")
+    if nsp is not None and alp is not None and nsp > 0.6 and alp < -1.0:
+        return True, f"no-speech (nsp={nsp:.2f}, logprob={alp:.2f})"
+    if cr is not None and cr > 2.4:
+        return True, f"compression-ratio tinggi ({cr:.2f})"
+    return False, ""
+
+
 # ── POST-PROCESSING ──────────────────────────
 
 def deduplicate_blocks(blocks: list) -> list:
@@ -386,6 +408,7 @@ def transcribe_chunk(rotator: gu.KeyRotator, audio_path: Path, chunk_offset: flo
                     response_format="verbose_json",
                     timestamp_granularities=["segment", "word"],
                     temperature=0.0,
+                    prompt=cfg.get("prompt") or None,
                 )
             segments = response.segments or []
             blocks = []
@@ -395,6 +418,15 @@ def transcribe_chunk(rotator: gu.KeyRotator, audio_path: Path, chunk_offset: flo
                 end = (seg["end"] if isinstance(seg, dict) else seg.end)
                 if not text:
                     continue
+                # ponytail: metadata confidence Whisper (avg_logprob / no_speech_prob /
+                # compression_ratio) — dipakai filter halusinasi berbasis sinyal, bukan
+                # frasa whack-a-mole.
+                if isinstance(seg, dict):
+                    nsp, alp, cr = seg.get("no_speech_prob"), seg.get("avg_logprob"), seg.get("compression_ratio")
+                else:
+                    nsp = getattr(seg, "no_speech_prob", None)
+                    alp = getattr(seg, "avg_logprob", None)
+                    cr = getattr(seg, "compression_ratio", None)
                 words = []
                 raw_words = (
                     seg.get("words", []) if isinstance(seg, dict)
@@ -415,7 +447,9 @@ def transcribe_chunk(rotator: gu.KeyRotator, audio_path: Path, chunk_offset: flo
                                      "end": round(w_end + chunk_offset, 3)})
                 blocks.append({"start": round(start + chunk_offset, 3),
                               "end": round(end + chunk_offset, 3),
-                              "text": text, "words": words})
+                              "text": text, "words": words,
+                              "no_speech_prob": nsp, "avg_logprob": alp,
+                              "compression_ratio": cr})
             rotator.next()
             return blocks
         except Exception as e:
@@ -581,6 +615,8 @@ def transcribe_video(rotator: gu.KeyRotator, video_path: Path, output_path: Path
     for b in all_blocks:
         dur = b["end"] - b["start"]
         halluc, reason = is_hallucination(b["text"], dur, lang)
+        if not halluc:
+            halluc, reason = is_low_confidence(b)
         if halluc:
             filtered_out.append((b["text"], reason))
         else:

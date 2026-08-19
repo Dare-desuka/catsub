@@ -69,6 +69,9 @@ Aturan WAJIB:
 
 Glossary wajib (konsisten, jangan ganti-ganti):
 - オシュレット / オシュレト → bidet (semprot toilet)
+- チンポ / チンコ / ちんちん / おちんちん / ペニス / チン → penis
+- Kata vulgar diterjemahkan dengan kata vulgar yang natural, JANGAN dibikin
+  klinis ("alat kelamin") atau diterjemahkan ngawur ("wastafel", dst).
 """,
         "user_header": lambda n, ids: (
             f"Terjemahkan subtitle berikut dari Bahasa Jepang ke Bahasa Indonesia.\n\n"
@@ -581,7 +584,26 @@ Aturan WAJIB:
 4. Jangan menambah, menghapus, atau menggabungkan baris.
 5. Jangan tulis penjelasan atau komentar.
 6. Output HARUS format: [ID] teks
-7. Semua ID input WAJIB muncul di output."""
+7. Semua ID input WAJIB muncul di output.
+8. Jangan menghaluskan atau menghapus kata vulgar/kasar — pertahankan kadar
+   vulgar yang sama. "penis", "vagina", "kontol", "memek" JANGAN diganti jadi
+   "alat kelamin" atau kata klinis, dan JANGAN dihapus."""
+
+# ponytail: glossary tambahan per bahasa sumber (hanya yang punya istilah khusus;
+# ja dulu, tambah kalau bahasa lain butuh).
+PROOFREAD_EXTRA = {
+    "ja": """
+
+Glossary untuk adegan dewasa (WAJIB konsisten):
+- チンポ / チンコ / ちんちん / おちんちん / ペニス / チン → penis (JANGAN "alat kelamin")
+- オシュレット / オシュレト → bidet
+- Kata vulgar diterjemahkan natural, jangan klinis, jangan dihapus.""",
+}
+
+# ponytail: aksara sumber non-Latin (ja/zh/ko/th/ru). En/tl Latin → scan N/A.
+NON_LATIN_RE = re.compile(
+    r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7a3\u0e00-\u0e7f\u0400-\u04ff]"
+)
 
 
 def _words(t: str) -> set:
@@ -602,9 +624,10 @@ def is_drastic_change(old: str, new: str) -> bool:
     return len(o & _words(new)) / len(o) < 0.4
 
 
-def proofread_srt(rotator: gu.KeyRotator, blocks: list) -> int:
+def proofread_srt(rotator: gu.KeyRotator, blocks: list, src_lang: str = "") -> int:
     if not blocks:
         return 0
+    system = PROOFREAD_SYSTEM + PROOFREAD_EXTRA.get(src_lang, "")
     step = PROOFREAD_CHUNK - PROOFREAD_OVERLAP
     chunks = [blocks[s:s + PROOFREAD_CHUNK] for s in range(0, len(blocks), step)]
     changed = 0
@@ -616,7 +639,7 @@ def proofread_srt(rotator: gu.KeyRotator, blocks: list) -> int:
         )
         ids_text = ", ".join(f"[{x['id']:03d}]" for x in items)
         messages = [
-            {"role": "system", "content": PROOFREAD_SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": (
                 f"Periksa dan perbaiki subtitle Indonesia berikut "
                 f"(chunk {ci+1}/{len(chunks)}).\n"
@@ -651,6 +674,15 @@ def proofread_srt(rotator: gu.KeyRotator, blocks: list) -> int:
             print(f"      {start}  {old[:50]!r} \u2192 {new[:50]!r}")
         if len(candidates) > 10:
             print(f"      ... dan {len(candidates)-10} lainnya")
+    # ponytail: jaring pengaman — blok yang masih berisi aksara bahasa sumber
+    # (sisa dari chunk parse gagal) dilaporkan, biar tidak lolos diam-diam.
+    leftover = [b for b in blocks if NON_LATIN_RE.search(b["text"])]
+    if leftover:
+        print(f"\n   {gu.RD}!  {len(leftover)} blok masih mengandung aksara bahasa sumber:{gu.R}")
+        for b in leftover[:10]:
+            print(f"      {b['start']}  {b['text'][:60]!r}")
+        if len(leftover) > 10:
+            print(f"      ... dan {len(leftover)-10} lainnya")
     return changed
 
 
@@ -743,7 +775,7 @@ def translate_file(rotator: gu.KeyRotator, input_path: Path, output_path: Path,
     if proofread and not failed_marked:
         print(f"\n   {gu.CY}QA proofread (scan konteks & perbaiki baris tak nyambung)...{gu.R}")
         t0 = time.time()
-        chg = proofread_srt(rotator, blocks)
+        chg = proofread_srt(rotator, blocks, src_lang)
         if chg:
             gu.write_srt(blocks, output_path)
             print(f"   {gu.YL}!  {chg} baris diperbaiki proofread  {gu.fmt_dur(time.time()-t0)}{gu.R}")
