@@ -591,7 +591,13 @@ Aturan WAJIB:
 7. Semua ID input WAJIB muncul di output.
 8. Jangan menghaluskan atau menghapus kata vulgar/kasar — pertahankan kadar
    vulgar yang sama. "penis", "vagina", "kontol", "memek" JANGAN diganti jadi
-   "alat kelamin" atau kata klinis, dan JANGAN dihapus."""
+   "alat kelamin" atau kata klinis, dan JANGAN dihapus.
+9. Pertahankan nama orang, nama panggilan, dan istilah khusus apa adanya
+   (mis. Hinokori, Kan-chan, Yo-kko, Oki, bidet, futon) — jangan dihapus atau
+   diganti kata umum.
+10. Jangan mengubah kata yang sudah benar hanya untuk gaya; fokus perbaiki
+    baris yang salah dengar / tidak nyambung dengan konteks. Perubahan
+    minimal lebih baik daripada rombak besar."""
 
 # ponytail: glossary tambahan per bahasa sumber (hanya yang punya istilah khusus;
 # ja dulu, tambah kalau bahasa lain butuh).
