@@ -15,6 +15,7 @@ video (ja/zh/en/ko/th/tl/ru)  →  transcribe (Groq Whisper)  →  translate (Gr
 - **Auto-detect bahasa** sumber (`auto`) atau paksa manual (`ja` / `zh` / `en` / `ko` / `th` / `tl` / `ru`).
 - **Transkripsi** dengan Groq Whisper `whisper-large-v3`.
 - **Terjemahan** ke Bahasa Indonesia dengan Groq GPT-OSS `openai/gpt-oss-120b`.
+- **QA proofread** — setelah translate, subtitle di-scan ulang ber-konteks untuk memperbaiki baris tak nyambung/salah dengar; mode `--proofread` bisa dipakai untuk QA ulang file `*_ID.srt` yang sudah ada. Di mode ini, tiap baris yang diubah dicatat ke log revisi `<file>.proofread.log`.
 - **Rotasi multi API key** — pakai beberapa key sekaligus (round-robin) untuk menghindari rate limit.
 - **Resume translate** — kalau sebagian baris gagal diterjemahkan, jalankan ulang dan hanya baris yang gagal yang diproses (baris valid dipakai ulang).
 - **Cache transkripsi** — hasil transcribe disimpan, jadi translate yang gagal bisa diulang tanpa transcribe dua kali.
@@ -111,6 +112,8 @@ Pipeline akan:
 
 Hasil akhir subtitle ada di `srt/subtitles/` (suffix `_ID.srt`).
 
+Tanpa env var, `./sub.sh` menampilkan **menu interaktif**: subtitle saja, subtitle + mux MKV, + clean, auto, mux saja, atau **scan konteks** (QA proofread ulang file `*_ID.srt` yang sudah ada).
+
 ## Opsi Pipeline
 
 Semua opsi diatur lewat environment variable:
@@ -176,3 +179,13 @@ python3 srt.py --lang ja --input /path/input.srt --output /path/output_ID.srt
 ```
 
 Bahasa sumber didukung: `ja`, `zh`, `en`, `ko`, `th`, `tl`, `ru`. Target selalu Bahasa Indonesia (suffix `_ID.srt`).
+
+QA proofread untuk file `*_ID.srt` yang sudah ada (tanpa perlu `--lang`):
+
+```bash
+cd srt
+source venv/bin/activate
+python3 srt.py --proofread --input /path/output_ID.srt
+```
+
+Perubahan tiap baris yang direvisi dicatat ke `<file>.proofread.log` di samping SRT (format `start  'old' → 'new'`).

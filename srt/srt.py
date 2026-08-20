@@ -638,13 +638,13 @@ def is_drastic_change(old: str, new: str) -> bool:
     return len(o & _words(new)) / len(o) < 0.4
 
 
-def proofread_srt(rotator: gu.KeyRotator, blocks: list, src_lang: str = "") -> int:
+def proofread_srt(rotator: gu.KeyRotator, blocks: list, src_lang: str = "") -> list:
     if not blocks:
-        return 0
+        return []
     system = PROOFREAD_SYSTEM + PROOFREAD_EXTRA.get(src_lang, "")
     step = PROOFREAD_CHUNK - PROOFREAD_OVERLAP
     chunks = [blocks[s:s + PROOFREAD_CHUNK] for s in range(0, len(blocks), step)]
-    changed = 0
+    changes = []
     candidates = []
     for ci, chunk in enumerate(chunks):
         items = [{"id": i + 1, "text": b["text"]} for i, b in enumerate(chunk)]
@@ -680,7 +680,7 @@ def proofread_srt(rotator: gu.KeyRotator, blocks: list, src_lang: str = "") -> i
                 if is_drastic_change(old, newtext):
                     candidates.append((chunk[i]["start"], old, newtext))
                 chunk[i]["text"] = newtext
-                changed += 1
+                changes.append((chunk[i]["start"], old, newtext))
     if candidates:
         print(f"\n   {gu.CY}Kandidat perubahan drastis ({len(candidates)}):{gu.R}")
         print(f"   {gu.DM}periksa pola garble/halusinasi baru; tambah ke frasa kalau perlu.{gu.R}")
@@ -697,7 +697,14 @@ def proofread_srt(rotator: gu.KeyRotator, blocks: list, src_lang: str = "") -> i
             print(f"      {b['start']}  {b['text'][:60]!r}")
         if len(leftover) > 10:
             print(f"      ... dan {len(leftover)-10} lainnya")
-    return changed
+    return changes
+
+
+def write_proofread_log(srt_path: Path, changes: list) -> Path:
+    log_path = Path(str(srt_path) + ".proofread.log")
+    lines = [f"{start}  {old!r} \u2192 {new!r}" for start, old, new in changes]
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return log_path
 
 
 # ─────────────────────────────────────────────
@@ -789,10 +796,10 @@ def translate_file(rotator: gu.KeyRotator, input_path: Path, output_path: Path,
     if proofread and not failed_marked:
         print(f"\n   {gu.CY}QA proofread (scan konteks & perbaiki baris tak nyambung)...{gu.R}")
         t0 = time.time()
-        chg = proofread_srt(rotator, blocks, src_lang)
-        if chg:
+        changes = proofread_srt(rotator, blocks, src_lang)
+        if changes:
             gu.write_srt(blocks, output_path)
-            print(f"   {gu.YL}!  {chg} baris diperbaiki proofread  {gu.fmt_dur(time.time()-t0)}{gu.R}")
+            print(f"   {gu.YL}!  {len(changes)} baris diperbaiki proofread  {gu.fmt_dur(time.time()-t0)}{gu.R}")
         else:
             print(f"   {gu.DM}  Tidak ada baris yang diubah.  {gu.fmt_dur(time.time()-t0)}{gu.R}")
     return {"total": total, "failed_marked": failed_marked, "src_chars_left": src_chars_left}
@@ -841,10 +848,12 @@ def main():
             print(f"{gu.RD}x  File kosong atau format tidak valid: {fp}{gu.R}")
             return 1
         print(f"{gu.CY}  QA proofread: {fp.name}{gu.R}  ({len(blocks)} baris)")
-        chg = proofread_srt(rotator, blocks)
-        if chg:
+        changes = proofread_srt(rotator, blocks)
+        if changes:
             gu.write_srt(blocks, fp)
-            print(f"{gu.GR}\u2714  {chg} baris diperbaiki, file ditulis ulang.{gu.R}")
+            log_path = write_proofread_log(fp, changes)
+            print(f"{gu.GR}\u2714  {len(changes)} baris diperbaiki, file ditulis ulang.{gu.R}")
+            print(f"   {gu.DM}Log revisi: {log_path}{gu.R}")
         else:
             print(f"{gu.DM}  Tidak ada baris yang diubah.{gu.R}")
         return 0
