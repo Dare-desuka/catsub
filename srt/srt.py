@@ -70,6 +70,10 @@ Aturan WAJIB:
 Glossary wajib (konsisten, jangan ganti-ganti):
 - オシュレット / オシュレト → bidet (semprot toilet)
 - チンポ / チンコ / ちんちん / おちんちん / ペニス / チン → penis
+- Varian yang sering salah dengar Whisper juga penis: シンポ / キンコ / きんじん / イチンポ → penis
+- クリ / くり → klitoris
+- マンコ / まんこ / おまんこ → memek
+- ペニマンコ → penis dan memek
 - Kata vulgar diterjemahkan dengan kata vulgar yang natural, JANGAN dibikin
   klinis ("alat kelamin") atau diterjemahkan ngawur ("wastafel", dst).
 """,
@@ -596,6 +600,10 @@ PROOFREAD_EXTRA = {
 
 Glossary untuk adegan dewasa (WAJIB konsisten):
 - チンポ / チンコ / ちんちん / おちんちん / ペニス / チン → penis (JANGAN "alat kelamin")
+- Varian salah dengar Whisper: シンポ / キンコ / きんじん / イチンポ → penis
+- クリ / くり → klitoris
+- マンコ / まんこ / おまんこ → memek
+- ペニマンコ → penis dan memek
 - オシュレット / オシュレト → bidet
 - Kata vulgar diterjemahkan natural, jangan klinis, jangan dihapus.""",
 }
