@@ -194,6 +194,21 @@ def extract_audio_chunk(video_path: Path, start_sec: float, duration_sec: float,
     return result.returncode == 0
 
 
+def chunk_is_silent(audio_path: Path, thresh_db: float = -50.0) -> bool:
+    # ponytail: VAD murah via ffmpeg volumedetect — chunk tanpa suara dilewati
+    # supaya Whisper tidak pernah melihat non-speech (pemicu halusinasi utama).
+    # Naikkan thresh_db kalau ada suara asli yang ikut terbuang.
+    cmd = ["ffmpeg", "-i", str(audio_path), "-af", "volumedetect", "-f", "null", "-"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return False
+    m = re.search(r"max_volume:\s*(-?\d+(?:\.\d+)?) dB", r.stderr)
+    if not m:
+        return "max_volume: -inf" in r.stderr  # sunyi digital total
+    return float(m.group(1)) < thresh_db
+
+
 # ── FILTER NOISE ─────────────────────────────
 
 def _tokenize(text: str) -> list:
@@ -213,7 +228,9 @@ def is_noise_segment(text: str, lang: str) -> bool:
         return True
     if clean.lower() in gu.BREATH_EXACT:
         return True
-    if len(clean) <= 2:
+    if len(clean) > 2 and gu.BREATH_CHARS_RE.fullmatch(clean):
+        return True
+    if len(clean) <= 2 and not cfg["char_re"].search(clean):
         return True
     char_count = Counter(clean)
     if char_count.most_common(1)[0][1] / len(clean) >= 0.55:
@@ -582,6 +599,7 @@ def transcribe_video(rotator: gu.KeyRotator, video_path: Path, output_path: Path
     print(f"   Model  : {MODEL}  [key #{rotator.idx+1}]")
     print()
     all_blocks = []
+    silent_skipped = 0
     with tempfile.TemporaryDirectory() as tmpdir:
         for ci in range(n_chunks):
             start_sec = ci * (chunk_sec - OVERLAP_SEC)
@@ -600,11 +618,17 @@ def transcribe_video(rotator: gu.KeyRotator, video_path: Path, output_path: Path
             if not extract_audio_chunk(video_path, start_sec, actual_dur, audio_path):
                 print(f"\n   {gu.RD}\u2718  ffmpeg gagal chunk {ci+1}{gu.R}")
                 continue
+            if chunk_is_silent(audio_path):
+                silent_skipped += 1
+                audio_path.unlink(missing_ok=True)
+                continue
             blocks = transcribe_chunk(rotator, audio_path, start_sec, lang)
             all_blocks.extend(blocks)
             audio_path.unlink(missing_ok=True)
             if ci < n_chunks - 1:
                 time.sleep(1.0)
+    if silent_skipped:
+        print(f"\r{gu.DM}   Skip {silent_skipped}/{n_chunks} chunk sunyi (hemat panggilan API){gu.R}")
     print(f"\r   {gu.DM}{'\u2500' * 50}{gu.R}")
     raw_count = len(all_blocks)
     print(f"   {gu.DM}Post-processing\u2026{gu.R}", end="", flush=True)

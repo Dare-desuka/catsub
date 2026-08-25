@@ -69,6 +69,8 @@ Aturan WAJIB:
 
 Glossary wajib (konsisten, jangan ganti-ganti):
 - オシュレット / オシュレト → bidet (semprot toilet)
+- いく / いくいく / いっちゃう / イく / 行っちゃう dalam konteks seks = mau orgasm/climax →
+  "aku mau keluar" / "aku mau cum" — JANGAN literal "pergi" atau "menahan"
 - チンポ / チンコ / ちんちん / おちんちん / ペニス / チン → penis
 - Varian yang sering salah dengar Whisper juga penis: シンポ / キンコ / きんじん / イチンポ → penis
 - クリ / くり → klitoris
@@ -484,7 +486,10 @@ def groq_request(rotator: gu.KeyRotator, messages, max_tokens=4096):
             raise
         except Exception as e:
             err = str(e).lower()
-            is_ratelimit = "429" in err or "rate_limit" in err or "too many requests" in err
+            # ponytail: 413 "request too large" mengandung substring rate_limit_exceeded —
+            # bukan limit key, payload kegedean. Jangan rotasi key sehat.
+            is_ratelimit = ("429" in err or "rate_limit" in err or "too many requests" in err) \
+                and "request too large" not in err and "413" not in err
             is_daily = "daily" in err or "quota" in err or "limit exceeded" in err
             is_invalid = "401" in err or "403" in err or "invalid" in err or "auth" in err
             if is_daily or is_ratelimit:
@@ -573,7 +578,9 @@ def translate_batch(rotator: gu.KeyRotator, texts, global_start_index, src_lang:
 #  PROOFREAD PASS (QA konteks)
 # ─────────────────────────────────────────────
 
-PROOFREAD_CHUNK = 100
+# ponytail: 50 bukan 100 — TPM free tier Groq 8k/request; mode berpasangan (sumber+ID)
+# + system prompt + max_tokens=4096 melebihi 8000 kalau 100 baris → 413 salah dikira rate limit.
+PROOFREAD_CHUNK = 50
 PROOFREAD_OVERLAP = 5
 
 PROOFREAD_SYSTEM = """Kamu adalah editor subtitle Indonesia yang memeriksa kualitas terjemahan.
@@ -611,6 +618,8 @@ Glossary untuk adegan dewasa (WAJIB konsisten):
 - マンコ / まんこ / おまんこ → memek
 - ペニマンコ → penis dan memek
 - オシュレット / オシュレト → bidet
+- いく / いっちゃう / イく dalam konteks seks = mau orgasm → "aku mau keluar/mau cum",
+  JANGAN literal "pergi" atau "menahan"
 - Kata vulgar diterjemahkan natural, jangan klinis, jangan dihapus.""",
 }
 
@@ -638,18 +647,27 @@ def is_drastic_change(old: str, new: str) -> bool:
     return len(o & _words(new)) / len(o) < 0.4
 
 
-def proofread_srt(rotator: gu.KeyRotator, blocks: list, src_lang: str = "") -> list:
+def proofread_srt(rotator: gu.KeyRotator, blocks: list, src_lang: str = "",
+                  src_map=None) -> list:
     if not blocks:
         return []
     system = PROOFREAD_SYSTEM + PROOFREAD_EXTRA.get(src_lang, "")
+    if src_map:
+        system += ("\nMODE BERPASANGAN: setiap item menampilkan sumber asli lalu terjemahan "
+                   "Indonesia. Bandingkan keduanya — kalau maknanya BEDA (salah arti, terbalik, "
+                   "atau literal yang salah), perbaiki terjemahannya sesuai sumber. Jangan ubah "
+                   "terjemahan yang sudah benar hanya karena gaya.")
     step = PROOFREAD_CHUNK - PROOFREAD_OVERLAP
     chunks = [blocks[s:s + PROOFREAD_CHUNK] for s in range(0, len(blocks), step)]
     changes = []
     candidates = []
     for ci, chunk in enumerate(chunks):
-        items = [{"id": i + 1, "text": b["text"]} for i, b in enumerate(chunk)]
+        items = [{"id": i + 1,
+                  "src": (src_map or {}).get(b["start"], ""),
+                  "text": b["text"]} for i, b in enumerate(chunk)]
         lines = "\n".join(
-            f"[{it['id']:03d}] {it['text'].replace(chr(10), ' ').strip()}" for it in items
+            f"[{it['id']:03d}] " + (f"(sumber) {it['src']}\n      " if it["src"] else "")
+            + it['text'].replace(chr(10), ' ').strip() for it in items
         )
         ids_text = ", ".join(f"[{x['id']:03d}]" for x in items)
         messages = [
@@ -799,6 +817,7 @@ def translate_file(rotator: gu.KeyRotator, input_path: Path, output_path: Path,
         changes = proofread_srt(rotator, blocks, src_lang)
         if changes:
             gu.write_srt(blocks, output_path)
+            write_proofread_log(output_path, changes)
             print(f"   {gu.YL}!  {len(changes)} baris diperbaiki proofread  {gu.fmt_dur(time.time()-t0)}{gu.R}")
         else:
             print(f"   {gu.DM}  Tidak ada baris yang diubah.  {gu.fmt_dur(time.time()-t0)}{gu.R}")
@@ -847,13 +866,33 @@ def main():
         if not blocks:
             print(f"{gu.RD}x  File kosong atau format tidak valid: {fp}{gu.R}")
             return 1
+        # ponytail: blok placeholder '.' (artefak garble Whisper) dibuang dulu
+        dots = [b for b in blocks if re.fullmatch(r"[.。\s]+", b["text"])]
+        if dots:
+            blocks = [b for b in blocks if b not in dots]
+            gu.write_srt(blocks, fp)
+            print(f"{gu.YL}  {len(dots)} blok placeholder '.' dibuang.{gu.R}")
+        # mode berpasangan: kalau transkrip sumber ada di cache, ikutkan
+        src_map = {}
+        stem = fp.stem[:-3] if fp.stem.endswith("_ID") else fp.stem
+        src_path = Path(__file__).resolve().parent.parent / "whisper" / "transcripts" / f"{stem}.srt"
+        if src_path.exists():
+            src_blocks = parse_srt(src_path)
+            src_map = {b["start"]: b["text"].replace("\n", " ") for b in src_blocks}
+            print(f"{gu.CY}  Mode berpasangan sumber: {src_path.name}{gu.R} ({len(src_map)} baris)")
+        else:
+            print(f"{gu.DM}  Transkrip sumber tidak ditemukan, scan tanpa pembanding.{gu.R}")
         print(f"{gu.CY}  QA proofread: {fp.name}{gu.R}  ({len(blocks)} baris)")
-        changes = proofread_srt(rotator, blocks)
+        changes = proofread_srt(rotator, blocks, src_map=src_map)
         if changes:
             gu.write_srt(blocks, fp)
             log_path = write_proofread_log(fp, changes)
             print(f"{gu.GR}\u2714  {len(changes)} baris diperbaiki, file ditulis ulang.{gu.R}")
             print(f"   {gu.DM}Log revisi: {log_path}{gu.R}")
+            for start, old, new in changes:
+                old1 = old.replace("\n", " ")
+                new1 = new.replace("\n", " ")
+                print(f"   {start}  {gu.YL}{old1!r}{gu.R} \u2192 {gu.GR}{new1!r}{gu.R}")
         else:
             print(f"{gu.DM}  Tidak ada baris yang diubah.{gu.R}")
         return 0

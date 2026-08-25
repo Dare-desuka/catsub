@@ -61,6 +61,7 @@ HALLUC_EN_EXACT = {
     "I'm a student at the University of Arizona.",
     "I am a student at the University of Arizona.",
     "i a student at the university of arizona",
+    "thank you jesus.", "Thank you Jesus.",
 }
 HALLUC_EN_CONTAINS = {
     "Thank you for watching", "Thanks for watching",
@@ -97,8 +98,21 @@ BREATH_EXACT = {
     "*sigh*", "*breath*", "*inhale*", "*exhale*", "(breath)", "(sigh)",
     "sigh", "breath", "pant", "exhale", "inhale",
     "ハァ", "ハア", "ふぅ", "ほぅ", "ふふぅ", "呼",        # JP desah
+    "ぬはぁ", "ぐはぁ", "ぷのはぁ",                          # JP desah (terkonfirmasi NOSKN-103)
     "嗯", "呼",                                            # ZH desah
 }
+
+# ponytail: segmen UTUH yang seluruh karakternya dari kelas desah/napas JA+ZH
+# (varian campuran seperti あぁはぁっ / ハァハァ / んぅあぁ) — lebih luas dari
+# BREATH_EXACT tanpa daftar per-frasa. Kata nyata hampir selalu mengandung char
+# di luar kelas (さ/し/た/て/と/な/の...), jadi risiko buang ucapan asli rendah.
+BREATH_CHARS_RE = re.compile(
+    "^[" 
+    "あぁぃいぅうぇえぉおっゃゅょゎわんはばぱひふへぼぽ"
+    "アィイゥウェェォオッャュョヮワンヴァハバパヒフヘボポ"
+    "嗯唔哦噢喔啊呀呣哼"
+    "]+$"
+)
 
 
 # ── Key utilities ────────────────────────────
@@ -185,7 +199,7 @@ class AllKeysExhausted(Exception):
 class KeyRotator:
     def __init__(self, keys: list):
         self.keys = [k.strip() for k in keys if valid_key(k)]
-        self.clients = [Groq(api_key=k) for k in self.keys]
+        self.clients = [Groq(api_key=k, timeout=600) for k in self.keys]  # ponytail: tanpa ini request bisa hang selamanya
         self.idx = 0
         self.cooldowns = {}
 
