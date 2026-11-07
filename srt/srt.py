@@ -184,7 +184,7 @@ Aturan WAJIB:
         "suffix_in": "_KO", "suffix_out": "_ID",
         "check_src_chars": False,
         "src_char_re": re.compile(r"[\uac00-\ud7a3]"),
-        "halluc_exact": set(),  # ponytail: kosong dulu
+        "halluc_exact": set(),
         "halluc_contains": set(),
         "system": """Kamu adalah penerjemah subtitle profesional dari Bahasa Korea ke Bahasa Indonesia.
 
@@ -346,6 +346,22 @@ Aturan WAJIB:
 }
 
 
+def _source_output_path_for(input_path: Path) -> Path:
+    stem = input_path.stem
+    if stem.endswith("_ID"):
+        stem = stem[:-3]
+    return Path(__file__).resolve().parent.parent / "whisper" / "transcripts" / f"{stem}.srt"
+
+
+def _resume_allowed(output_path: Path) -> bool:
+    if not output_path.exists():
+        return False
+    source_path = _source_output_path_for(output_path)
+    if not source_path.exists():
+        return True
+    return output_path.stat().st_mtime >= source_path.stat().st_mtime
+
+
 # ─────────────────────────────────────────────
 #  UI HELPERS
 # ─────────────────────────────────────────────
@@ -441,7 +457,7 @@ def parse_id_output(raw: str, expected_ids):
         except ValueError:
             continue
         text = re.sub(r"\n+", " ", m.group(2).strip()).strip()
-        text = text.strip("\"'""''")
+        text = text.strip("\"''")
         if text:
             found[num] = text
     result = []
@@ -486,8 +502,6 @@ def groq_request(rotator: gu.KeyRotator, messages, max_tokens=4096):
             raise
         except Exception as e:
             err = str(e).lower()
-            # ponytail: 413 "request too large" mengandung substring rate_limit_exceeded —
-            # bukan limit key, payload kegedean. Jangan rotasi key sehat.
             is_ratelimit = ("429" in err or "rate_limit" in err or "too many requests" in err) \
                 and "request too large" not in err and "413" not in err
             is_daily = "daily" in err or "quota" in err or "limit exceeded" in err
@@ -578,8 +592,6 @@ def translate_batch(rotator: gu.KeyRotator, texts, global_start_index, src_lang:
 #  PROOFREAD PASS (QA konteks)
 # ─────────────────────────────────────────────
 
-# ponytail: 50 bukan 100 — TPM free tier Groq 8k/request; mode berpasangan (sumber+ID)
-# + system prompt + max_tokens=4096 melebihi 8000 kalau 100 baris → 413 salah dikira rate limit.
 PROOFREAD_CHUNK = 50
 PROOFREAD_OVERLAP = 5
 
@@ -606,8 +618,6 @@ Aturan WAJIB:
     baris yang salah dengar / tidak nyambung dengan konteks. Perubahan
     minimal lebih baik daripada rombak besar."""
 
-# ponytail: glossary tambahan per bahasa sumber (hanya yang punya istilah khusus;
-# ja dulu, tambah kalau bahasa lain butuh).
 PROOFREAD_EXTRA = {
     "ja": """
 
@@ -623,7 +633,6 @@ Glossary untuk adegan dewasa (WAJIB konsisten):
 - Kata vulgar diterjemahkan natural, jangan klinis, jangan dihapus.""",
 }
 
-# ponytail: aksara sumber non-Latin (ja/zh/ko/th/ru). En/tl Latin → scan N/A.
 NON_LATIN_RE = re.compile(
     r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7a3\u0e00-\u0e7f\u0400-\u04ff]"
 )
@@ -634,9 +643,6 @@ def _words(t: str) -> set:
 
 
 def is_drastic_change(old: str, new: str) -> bool:
-    """Perubahan besar = sebagian besar kata sumber hilang/ganti. Indikator
-    garble/halusinasi yang diperbaiki konteks, bukan sekadar normalisasi gaya.
-    Baris pendek (<6 char) diabaikan — ganti satu-dua kata bukan pola garble."""
     if old == new:
         return False
     if len(old.strip()) < 6:
@@ -706,8 +712,6 @@ def proofread_srt(rotator: gu.KeyRotator, blocks: list, src_lang: str = "",
             print(f"      {start}  {old[:50]!r} \u2192 {new[:50]!r}")
         if len(candidates) > 10:
             print(f"      ... dan {len(candidates)-10} lainnya")
-    # ponytail: jaring pengaman — blok yang masih berisi aksara bahasa sumber
-    # (sisa dari chunk parse gagal) dilaporkan, biar tidak lolos diam-diam.
     leftover = [b for b in blocks if NON_LATIN_RE.search(b["text"])]
     if leftover:
         print(f"\n   {gu.RD}!  {len(leftover)} blok masih mengandung aksara bahasa sumber:{gu.R}")
@@ -754,20 +758,21 @@ def translate_file(rotator: gu.KeyRotator, input_path: Path, output_path: Path,
     blocks = clean_blocks
     total = len(blocks)
 
-    # ponytail: resume — reuse terjemahan lama yg valid, cuma terjemah yg gagal/baru.
-    # Key = start timestamp (stabil), BUKAN index: output SRT di-renumber 1..N setiap
-    # tulis, jadi index output tak sejajar dgn index input saat ada blok dibuang
-    # (halusinasi) — pakai index menyebabkan reuse salah blok setelah gap pertama.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     prev = {}
-    if output_path.exists():
+    resume_enabled = _resume_allowed(output_path)
+    if output_path.exists() and resume_enabled:
         for pb in parse_srt(output_path):
             if not str(pb["text"]).startswith("[BELUM_DITERJEMAHKAN]"):
                 prev[pb["start"]] = pb["text"]
+    else:
+        if output_path.exists():
+            print(f"   {gu.YL}!  Resume dinonaktifkan: transkrip sumber lebih baru daripada output, proses akan diulang dari awal.{gu.R}")
 
     texts, need_idx = [], []
     for i, b in enumerate(blocks):
         if b["start"] in prev:
-            texts.append(prev[b["start"]])   # reuse hasil lama yg valid
+            texts.append(prev[b["start"]])
         else:
             texts.append(b["text"])
             need_idx.append(i)
@@ -814,7 +819,12 @@ def translate_file(rotator: gu.KeyRotator, input_path: Path, output_path: Path,
     if proofread and not failed_marked:
         print(f"\n   {gu.CY}QA proofread (scan konteks & perbaiki baris tak nyambung)...{gu.R}")
         t0 = time.time()
-        changes = proofread_srt(rotator, blocks, src_lang)
+        src_map = {}
+        source_path = _source_output_path_for(input_path)
+        if source_path.exists():
+            for src_block in parse_srt(source_path):
+                src_map[src_block["start"]] = src_block["text"]
+        changes = proofread_srt(rotator, blocks, src_lang, src_map=src_map)
         if changes:
             gu.write_srt(blocks, output_path)
             write_proofread_log(output_path, changes)
@@ -824,14 +834,10 @@ def translate_file(rotator: gu.KeyRotator, input_path: Path, output_path: Path,
     return {"total": total, "failed_marked": failed_marked, "src_chars_left": src_chars_left}
 
 
-# ─────────────────────────────────────────────
-#  MAIN
-# ─────────────────────────────────────────────
-
 def main():
     global GROQ_API_KEYS
     parser = argparse.ArgumentParser(
-        description="Groq subtitle translator \u2014 multi-bahasa input \u2192 Indonesia"
+        description="Groq subtitle translator — multi-bahasa input → Indonesia"
     )
     parser.add_argument("--input", help="Path SRT yang mau diterjemahkan")
     parser.add_argument("--output", help="Path output *_ID.srt untuk mode --input")
@@ -855,8 +861,6 @@ def main():
     GROQ_API_KEYS.extend(valid_keys)
     rotator = gu.KeyRotator(GROQ_API_KEYS)
 
-    # ponytail: proofread generik (tidak butuh bahasa sumber) → jalan sebelum
-    # validasi --lang supaya bisa: srt.py --proofread --input x_ID.srt
     if args.proofread:
         fp = Path(args.input).expanduser().resolve()
         if not fp.exists():
@@ -866,13 +870,11 @@ def main():
         if not blocks:
             print(f"{gu.RD}x  File kosong atau format tidak valid: {fp}{gu.R}")
             return 1
-        # ponytail: blok placeholder '.' (artefak garble Whisper) dibuang dulu
         dots = [b for b in blocks if re.fullmatch(r"[.。\s]+", b["text"])]
         if dots:
             blocks = [b for b in blocks if b not in dots]
             gu.write_srt(blocks, fp)
             print(f"{gu.YL}  {len(dots)} blok placeholder '.' dibuang.{gu.R}")
-        # mode berpasangan: kalau transkrip sumber ada di cache, ikutkan
         src_map = {}
         stem = fp.stem[:-3] if fp.stem.endswith("_ID") else fp.stem
         src_path = Path(__file__).resolve().parent.parent / "whisper" / "transcripts" / f"{stem}.srt"
@@ -887,12 +889,12 @@ def main():
         if changes:
             gu.write_srt(blocks, fp)
             log_path = write_proofread_log(fp, changes)
-            print(f"{gu.GR}\u2714  {len(changes)} baris diperbaiki, file ditulis ulang.{gu.R}")
+            print(f"{gu.GR}✔  {len(changes)} baris diperbaiki, file ditulis ulang.{gu.R}")
             print(f"   {gu.DM}Log revisi: {log_path}{gu.R}")
             for start, old, new in changes:
                 old1 = old.replace("\n", " ")
                 new1 = new.replace("\n", " ")
-                print(f"   {start}  {gu.YL}{old1!r}{gu.R} \u2192 {gu.GR}{new1!r}{gu.R}")
+                print(f"   {start}  {gu.YL}{old1!r}{gu.R} → {gu.GR}{new1!r}{gu.R}")
         else:
             print(f"{gu.DM}  Tidak ada baris yang diubah.{gu.R}")
         return 0
@@ -930,8 +932,10 @@ def main():
         out = (Path(args.output).expanduser().resolve() if args.output
                else Path(output_folder) / f"{stem}_ID.srt")
         out.parent.mkdir(parents=True, exist_ok=True)
-        if out.exists() and not args.force:
-            print(f"{gu.YL}  Skip: output sudah ada \u2192 {out}{gu.R}")
+        if out.exists() and not args.force and not _resume_allowed(out):
+            print(f"{gu.YL}  Rebuild: output ada tapi sumber lebih baru atau resume tidak aman.{gu.R}")
+        if out.exists() and not args.force and _resume_allowed(out):
+            print(f"{gu.YL}  Skip: output sudah ada → {out}{gu.R}")
             return 0
         print(f"{gu.DM}{'-'*50}{gu.R}")
         print(f"{gu.B}[1/1]{gu.R}  {gu.CY}{fp.name}{gu.R}  "
@@ -944,7 +948,7 @@ def main():
         except Exception as e:
             print(f"   {gu.RD}x  Error: {e}{gu.R}")
             return 1
-        print(f"   {gu.GR}\u2714  Selesai{gu.R}  {info['total']} baris  {gu.fmt_dur(time.time()-t0)}")
+        print(f"   {gu.GR}✔  Selesai{gu.R}  {info['total']} baris  {gu.fmt_dur(time.time()-t0)}")
         print(f"   Output: {gu.CY}{out}{gu.R}")
         if info["failed_marked"]:
             print(f"   {gu.YL}!  {info['failed_marked']} baris [BELUM_DITERJEMAHKAN].{gu.R}")
@@ -959,7 +963,7 @@ def main():
             print(f"{gu.YL}!  Untuk mode --lang {src_lang}, cari pola: {pattern}{gu.R}")
             return 1
         print(f"{gu.YL}!  Tidak ada file {pattern}, fallback ke semua .srt{gu.R}\n")
-    print(f"{gu.GR}\u2714  Ditemukan {len(files)} file SRT [{cfg_src['label']}]{gu.R}\n")
+    print(f"{gu.GR}✔  Ditemukan {len(files)} file SRT [{cfg_src['label']}]{gu.R}\n")
     for i, f in enumerate(files, 1):
         print(f"   {gu.DM}{i}.{gu.R} {f.name}  {gu.DM}({f.stat().st_size/1024:.1f} KB){gu.R}")
     print()
@@ -972,8 +976,8 @@ def main():
                 stem = stem[:-len(sfx)]
                 break
         out = Path(output_folder) / f"{stem}_ID.srt"
-        if out.exists() and not args.force:
-            print(f"{gu.YL}  Skip: {fp.name} \u2192 output sudah ada{gu.R}")
+        if out.exists() and not args.force and _resume_allowed(out):
+            print(f"{gu.YL}  Skip: {fp.name} → output sudah ada{gu.R}")
             continue
         print(f"{gu.DM}{'-'*50}{gu.R}")
         print(f"{gu.B}[{idx}/{len(files)}]{gu.R}  {gu.CY}{fp.name}{gu.R}  "
@@ -982,7 +986,7 @@ def main():
         try:
             info = translate_file(rotator, fp, out, src_lang, proofread=not args.no_proofread)
             success += 1
-            print(f"   {gu.GR}\u2714  Selesai{gu.R}  {info['total']} baris  {gu.fmt_dur(time.time()-t0)}")
+            print(f"   {gu.GR}✔  Selesai{gu.R}  {info['total']} baris  {gu.fmt_dur(time.time()-t0)}")
             print(f"   Output: {gu.CY}{out}{gu.R}")
             if info["failed_marked"]:
                 print(f"   {gu.YL}!  {info['failed_marked']} baris [BELUM_DITERJEMAHKAN].{gu.R}")
@@ -995,7 +999,7 @@ def main():
     elapsed = time.time() - t_total
     print(f"\n{gu.DM}{'='*50}{gu.R}")
     print(f"{gu.B}{gu.CY}  RINGKASAN{gu.R}")
-    print(f"  {gu.GR}\u2714  Berhasil : {success} file{gu.R}")
+    print(f"  {gu.GR}✔  Berhasil : {success} file{gu.R}")
     if failed:
         print(f"  {gu.RD}x  Gagal    : {len(failed)} file{gu.R}")
         for f in failed:
