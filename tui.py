@@ -642,9 +642,8 @@ def run_videos(stdscr, title, videos, env, pause):
             if show_done(stdscr, title, v, i, len(videos), rc, dt, job,
                          allow_stop=True) == "stop":
                 return results
-        else:
-            show_done(stdscr, title, v, i, len(videos), rc, dt, job,
-                      allow_stop=False)
+        # ponytail: auto-lanjut — jangan tunggu tombol, langsung video berikutnya
+        # (status akhir tetap diringkas di msg() di akhir run_videos)
     ok = sum(1 for _, rc in results if rc == 0)
     fail = sum(1 for _, rc in results if rc not in (0, None))
     lines = [f"Selesai: {ok} OK, {fail} gagal dari {len(results)} video."]
@@ -690,7 +689,7 @@ def flow_pipeline(stdscr, mode):
             stdscr, "Mode 3 me-trash source setelah MKV sukses. Lanjut?"):
         return
     run_videos(stdscr, titles[mode], [vids[i] for i in idx], env,
-               pause=(mode != "auto"))
+               pause=False)
 
 
 def flow_custom(stdscr):

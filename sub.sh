@@ -15,7 +15,7 @@ SRT_OUTPUT_DIR="$SRT_DIR/subtitles"
 FORCE="${FORCE:-0}"
 
 # AUTO=1 ./sub.sh   → jalan terus tanpa pause (non-interaktif / cron)
-AUTO="${AUTO:-0}"
+AUTO="${AUTO:-1}"
 
 # MKV=1 ./sub.sh    → mux video asli + subtitle ID jadi .mkv (softsub, buang sub lama)
 MKV="${MKV:-0}"
