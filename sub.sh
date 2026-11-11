@@ -37,6 +37,37 @@ if [ -z "$SUBTITLE_LANG" ]; then
 fi
 SUBTITLE_LANG="${SUBTITLE_LANG,,}"
 
+# ─── Debug / dry-run / JSON log ────────────────────────────────────────────────
+VERBOSE="${VERBOSE:-0}"
+DRY_RUN="${DRY_RUN:-0}"
+JSON_LOG="${JSON_LOG:-}"
+# ponytail: flag CLI minimal — --verbose dump raw Groq/ffprobe, --dry-run preview tanpa Groq, --json-log tulis pipeline.json
+# argumen posisi = path video eksplisit (./sub.sh ~/a.mp4 /mnt/b.mkv), tanpa harus taruh di whisper/videos
+CLI_VIDEOS=()
+for arg in "$@"; do
+    case "$arg" in
+        --verbose|-v) VERBOSE=1 ;;
+        --dry-run) DRY_RUN=1 ;;
+        --json-log) JSON_LOG="$SCRIPT_DIR/pipeline.json" ;;
+        --json-log=*) JSON_LOG="${arg#--json-log=}" ;;
+        -*) ;;
+        *) CLI_VIDEOS+=("$arg") ;;
+    esac
+done
+
+# ponytail: JSON log terstruktur — satu line per event, append
+json_log() {
+    [ -z "$JSON_LOG" ] && return 0
+    mkdir -p "$(dirname "$JSON_LOG")" 2>/dev/null || true
+    printf '%s\n' "$1" >> "$JSON_LOG"
+}
+# ponytail: extra args untuk python scripts biar verbose/dry-run/json konsisten
+WHISPER_EXTRA=""
+SRT_EXTRA=""
+[ "$VERBOSE" = "1" ] && WHISPER_EXTRA="$WHISPER_EXTRA --verbose" && SRT_EXTRA="$SRT_EXTRA --verbose"
+[ -n "$JSON_LOG" ] && WHISPER_EXTRA="$WHISPER_EXTRA --json-log $JSON_LOG" && SRT_EXTRA="$SRT_EXTRA --json-log $JSON_LOG"
+[ "$DRY_RUN" = "1" ] && WHISPER_EXTRA="$WHISPER_EXTRA --dry-run" && SRT_EXTRA="$SRT_EXTRA --dry-run"
+
 # ─── Warna ───────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -48,6 +79,8 @@ DIM='\033[2m'
 RESET='\033[0m'
 
 print_header() {
+    # ponytail: TUI_QUIET — TUI punya judul panel sendiri, box dekoratif dibuang
+    [ -n "${TUI_QUIET:-}" ] && return 0
     echo ""
     echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════╗${RESET}"
     echo -e "${BOLD}${CYAN}║  🎬  AI SUBTITLE PIPELINE · SAFE SEQUENTIAL      ║${RESET}"
@@ -68,6 +101,13 @@ fail() { echo -e "\n${RED}╳ ERROR: $1${RESET}\n"; exit 1; }
 run_with_spinner() {
     local step="$1"
     shift
+    # ponytail: TUI_QUIET=1 (dari tui.py) — TUI gambar animasinya sendiri
+    # (spinner braille + bar), frame spinner bash cuma jadi sampah log.
+    if [ -n "${TUI_QUIET:-}" ]; then
+        info "$step..."
+        "$@"
+        return $?
+    fi
     local pid
     local spin='-\|/'
     local i=0
@@ -94,6 +134,9 @@ run_in_venv() {
     (
         cd "$workdir" || exit 1
         source venv/bin/activate || exit 1
+        # ponytail: tanpa ini stdout python di-buffer saat di-pipe (TUI) —
+        # panel log kosong ber-menit2 padahal job jalan (kelihatan hang)
+        export PYTHONUNBUFFERED=1
         "$@"
         local code=$?
         deactivate 2>/dev/null || true
@@ -200,11 +243,12 @@ show_menu() {
     echo -e "${BOLD}${CYAN}║${RESET}  4) Auto SRT saja (tanpa pause)             ${BOLD}${CYAN}║${RESET}"
     echo -e "${BOLD}${CYAN}║${RESET}  5) Mux MKV saja (pilih SRT)                ${BOLD}${CYAN}║${RESET}"
     echo -e "${BOLD}${CYAN}║${RESET}  6) Scan konteks (QA proofread)             ${BOLD}${CYAN}║${RESET}"
+    echo -e "${BOLD}${CYAN}║${RESET}  7) Path lain (ketik manual)                ${BOLD}${CYAN}║${RESET}"
     echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════╝${RESET}"
     echo ""
 
     while true; do
-        echo -ne "  Pilih [1-6]: "
+        echo -ne "  Pilih [1-7]: "
         read -r pilihan </dev/tty
         case "$pilihan" in
             1) MKV=0; CLEAN=0; AUTO=0; FROM_MENU=1; info "Mode: SRT saja"; break ;;
@@ -213,15 +257,77 @@ show_menu() {
             4) MKV=0; CLEAN=0; AUTO=1; FROM_MENU=1; info "Mode: Auto SRT (tanpa pause)"; break ;;
             5) MODE_MUX_SELECT=1; break ;;
             6) MODE_SCAN_CONTEXT=1; break ;;
-            *) echo -e "  ${RED}Pilih 1-6${RESET}" ;;
+            7) MODE_CUSTOM_PATH=1; MKV=0; CLEAN=0; AUTO=1; FROM_MENU=1; info "Mode: Path lain (auto)"; break ;;
+            *) echo -e "  ${RED}Pilih 1-7${RESET}" ;;
         esac
     done
+}
+
+# ─── Path video manual (opsi 7: satu path per baris, kosong = selesai) ─────────
+# ponytail: satu-per-baris biar path berspasi aman tanpa parsing kutip; glob
+# ~/Videos/*.mp4 + folder (scan isi) di-expand per baris, validasi reuse aturan CLI.
+ask_custom_paths() {
+    echo ""
+    echo -e "  ${BOLD}Ketik path video (satu per baris, Enter kosong = selesai):${RESET}"
+    echo -e "  ${DIM}Contoh: ~/Videos/a.mp4  /mnt/data/*.mkv  /mnt/data/folder/${RESET}"
+    CUSTOM_VIDEOS=()
+    while true; do
+        echo -ne "  path: "
+        read -r p </dev/tty || break
+        [ -z "$p" ] && break
+        p="${p/#\~/$HOME}"
+        if [ -d "$p" ]; then
+            while IFS= read -r -d '' f; do
+                CUSTOM_VIDEOS+=("$f")
+            done < <(find "$p" -maxdepth 1 -type f \
+                \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.avi" \
+                   -o -iname "*.mov" -o -iname "*.webm" -o -iname "*.flv" \) \
+                -print0 2>/dev/null | sort -z)
+        elif [[ "$p" == *[\*\?\[]* ]]; then
+            expanded=($(compgen -G "$p"))
+            [ "${#expanded[@]}" -eq 0 ] && { warn "Tidak cocok, skip: $p"; continue; }
+            for f in "${expanded[@]}"; do
+                [ -f "$f" ] || continue
+                case "${f,,}" in
+                    *.mp4|*.mkv|*.avi|*.mov|*.webm|*.flv) CUSTOM_VIDEOS+=("$f") ;;
+                    *) warn "Ekstensi tak didukung, skip: $f" ;;
+                esac
+            done
+        else
+            if [ ! -f "$p" ]; then
+                warn "File tidak ada, skip: $p"
+                continue
+            fi
+            case "${p,,}" in
+                *.mp4|*.mkv|*.avi|*.mov|*.webm|*.flv) CUSTOM_VIDEOS+=("$p") ;;
+                *) warn "Ekstensi tak didukung, skip: $p" ;;
+            esac
+        fi
+    done
+    if [ "${#CUSTOM_VIDEOS[@]}" -eq 0 ]; then
+        warn "Tidak ada path valid — kembali ke menu."
+        return 1
+    fi
+    info "Terkumpul: ${#CUSTOM_VIDEOS[@]} video"
+    return 0
 }
 
 # ─── Pilih SRT *_ID.srt (dipakai mux & scan konteks) ───────────────────────────
 # ponytail: parser pilihan 1,3,7 / 1-5 / kosong=semua di-dup kecil dari filter
 # video — array beda, ekstrak helper umum kalau nanti dipakai >2x.
 select_srt_files() {
+    # ponytail: TUI non-interaktif — daftar path via env newline-separated, skip prompt /dev/tty
+    if [ -n "${TUI_SRTS:-}" ]; then
+        SELECTED_SRTS=()
+        while IFS= read -r f; do
+            [ -f "$f" ] && SELECTED_SRTS+=("$f")
+        done <<< "$TUI_SRTS"
+        if [ "${#SELECTED_SRTS[@]}" -eq 0 ]; then
+            warn "TUI_SRTS kosong/tidak valid."
+            return 1
+        fi
+        return 0
+    fi
     local -a srt_list=()
     while IFS= read -r -d '' f; do
         srt_list+=("$f")
@@ -336,24 +442,21 @@ mux_selected() {
     fi
 
     ok "Mux selesai: $count MKV."
-    echo ""
-    echo -ne "  Hapus video + SRT yang sudah di-mux? [${GREEN}y${RESET}/${RED}N${RESET}] "
-    read -r hapus </dev/tty
-    case "${hapus,,}" in
-        y|yes)
-            local cleaned=0 stem
-            for stem in "${cleaned_stems[@]}"; do
-                local ext
-                for ext in mp4 mkv avi mov webm flv; do
-                    candidate="$VIDEO_DIR/$stem.$ext"
-                    [ -f "$candidate" ] && { to_trash "$candidate"; break; }
-                done
-                to_trash "$SRT_OUTPUT_DIR/${stem}_ID.srt"
-                ((cleaned++))
-            done
-            ok "Clean: $cleaned video + SRT dikirim ke trash."
-            ;;
-    esac
+
+    # Auto cleanup: hapus video source + SRT di srt/subtitles + whisper cache di whisper/transcripts
+    local cleaned=0 stem
+    for stem in "${cleaned_stems[@]}"; do
+        local ext
+        for ext in mp4 mkv avi mov webm flv; do
+            candidate="$VIDEO_DIR/$stem.$ext"
+            [ -f "$candidate" ] && { to_trash "$candidate"; break; }
+        done
+        to_trash "$SRT_OUTPUT_DIR/${stem}_ID.srt"
+        to_trash "$WHISPER_SRT_DIR/${stem}.srt"
+        to_trash "$WHISPER_SRT_DIR/${stem}.lang"
+        ((cleaned++))
+    done
+    [ "$cleaned" -gt 0 ] && ok "Clean: $cleaned video + SRT + whisper cache dikirim ke trash."
 }
 
 # ─── Scan konteks (QA proofread) SRT pilihan ───────────────────────────────────
@@ -361,16 +464,35 @@ scan_context() {
     select_srt_files || return 0
     local srt_file
     for srt_file in "${SELECTED_SRTS[@]}"; do
-        info "Scan konteks: $(basename "$srt_file")"
-        run_with_spinner "Proofread $(basename "$srt_file")" \
-            run_in_venv "$SRT_DIR" python3 srt.py --proofread --input "$srt_file"
+        echo -e "  ${CYAN}►${RESET}  Scan konteks: $(basename "$srt_file")"
+        run_in_venv "$SRT_DIR" python3 srt.py --proofread --input "$srt_file" --yes $SRT_EXTRA
     done
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ponytail: --help / --dry-run bypass menu (non-interaktif, tidak butuh /dev/tty)
+for arg in "$@"; do
+    case "$arg" in
+        --help|-h)
+            echo "Usage: ./sub.sh [video ...] [--verbose|-v] [--dry-run] [--json-log[=FILE]] [--help]"
+            echo "  Pipeline: transcribe (Groq Whisper) → translate (Groq GPT-OSS) → MKV"
+            echo "  Menu 7 = ketik path manual (satu per baris, dukung glob ~/V/*.mp4 + folder)"
+            echo "  ENV: MKV=1 CLEAN=1 AUTO=1 FORCE=1 SUB_LANG=ja|zh|en|ko|th|tl|ru|auto VERBOSE=1 DRY_RUN=1 JSON_LOG=path"
+            exit 0
+            ;;
+    esac
+done
+
+# ── Mode TUI non-interaktif (tui.py: TUI_MODE=mux|scan + TUI_SRTS newline-separated)
+# ponytail: dispatch di bawah reuse mux_selected/scan_context apa adanya (single source of truth ffmpeg/proofread)
+if [ "${TUI_MODE:-}" = "mux" ]; then
+    MODE_MUX_SELECT=1
+elif [ "${TUI_MODE:-}" = "scan" ]; then
+    MODE_SCAN_CONTEXT=1
+fi
 # ── Menu interaktif (kalau tidak ada env var mode yang diset) ──────────────
-if [ "$MKV" != "1" ] && [ "$CLEAN" != "1" ] && [ "$AUTO" != "1" ]; then
+if [ "$DRY_RUN" != "1" ] && [ "$MKV" != "1" ] && [ "$CLEAN" != "1" ] && [ "$AUTO" != "1" ] && [ -z "${TUI_MODE:-}" ]; then
     show_menu
     if [ "${MODE_MUX_SELECT:-0}" = "1" ]; then
         mux_selected
@@ -380,29 +502,62 @@ if [ "$MKV" != "1" ] && [ "$CLEAN" != "1" ] && [ "$AUTO" != "1" ]; then
         scan_context
         exit 0
     fi
+    # ponytail: opsi 7 isi CLI_VIDEOS biar validasi + skip filter reuse jalur argumen
+    if [ "${MODE_CUSTOM_PATH:-0}" = "1" ]; then
+        ask_custom_paths || exit 0
+        CLI_VIDEOS=("${CUSTOM_VIDEOS[@]}")
+    fi
+fi
+
+# ponytail: dispatch mode TUI (jalur interaktif sudah exit di dalam show_menu)
+if [ "${MODE_MUX_SELECT:-0}" = "1" ]; then
+    mux_selected
+    exit 0
+fi
+if [ "${MODE_SCAN_CONTEXT:-0}" = "1" ]; then
+    scan_context
+    exit 0
 fi
 
 print_header
 START_TIME=$SECONDS
+# ponytail: json log header
+json_log "{\"event\":\"pipeline_start\",\"ts\":$(date +%s),\"verbose\":$VERBOSE,\"dry_run\":$DRY_RUN,\"lang\":\"$SUBTITLE_LANG\",\"mkv\":$MKV,\"clean\":$CLEAN}"
 
 validate_lang "$SUBTITLE_LANG" || fail "Bahasa tidak valid: '$SUBTITLE_LANG'. Pakai SUB_LANG=auto|ja|zh|en"
 
 mkdir -p "$VIDEO_DIR" "$WHISPER_SRT_DIR" "$SRT_INPUT_DIR" "$SRT_OUTPUT_DIR"
 [ "$MKV" = "1" ] && mkdir -p "$MKV_OUT_DIR"
 
-mapfile -d '' VIDEO_LIST < <(find "$VIDEO_DIR" -maxdepth 1 \
-    \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.avi" \
-       -o -iname "*.mov" -o -iname "*.webm" -o -iname "*.flv" \) \
-    -print0 2>/dev/null | sort -z)
+# ponytail: path video eksplisit dipakai langsung; tanpa argumen → scan folder seperti dulu
+if [ "${#CLI_VIDEOS[@]}" -gt 0 ]; then
+    VIDEO_LIST=()
+    for v in "${CLI_VIDEOS[@]}"; do
+        if [ ! -f "$v" ]; then
+            warn "File tidak ada, skip: $v"
+            continue
+        fi
+        case "${v,,}" in
+            *.mp4|*.mkv|*.avi|*.mov|*.webm|*.flv) VIDEO_LIST+=("$v") ;;
+            *) warn "Ekstensi video tak didukung, skip: $v" ;;
+        esac
+    done
+    [ "${#VIDEO_LIST[@]}" -eq 0 ] && fail "Tidak ada path video valid dari argumen."
+else
+    mapfile -d '' VIDEO_LIST < <(find "$VIDEO_DIR" -maxdepth 1 \
+        \( -iname "*.mp4" -o -iname "*.mkv" -o -iname "*.avi" \
+           -o -iname "*.mov" -o -iname "*.webm" -o -iname "*.flv" \) \
+        -print0 2>/dev/null | sort -z)
 
-if [ "${#VIDEO_LIST[@]}" -eq 0 ]; then
-    fail "Tidak ada video di $VIDEO_DIR"
+    if [ "${#VIDEO_LIST[@]}" -eq 0 ]; then
+        fail "Tidak ada video di $VIDEO_DIR"
+    fi
 fi
 
 echo -e "${BOLD}${BLUE}┌─ Ditemukan ${#VIDEO_LIST[@]} video${RESET}"
 
-# ── Filter video interaktif (hanya dari menu) ────────────────────────────
-if [ "${FROM_MENU:-0}" = "1" ]; then
+# ── Filter video interaktif (hanya dari menu & tanpa path eksplisit) ─────────
+if [ "${FROM_MENU:-0}" = "1" ] && [ "${#CLI_VIDEOS[@]}" -eq 0 ]; then
     echo ""
     echo -e "  ${BOLD}Pilih video yang diproses:${RESET}"
     for i in "${!VIDEO_LIST[@]}"; do
@@ -472,6 +627,21 @@ done
 TOTAL_NEED=${#NEED_PROCESS[@]}
 PROCESSED=0   # counter video yang sudah selesai dalam sesi ini
 
+# ponytail: dry-run preview tanpa Groq
+if [ "$DRY_RUN" = "1" ]; then
+    info "[dry-run] Preview tanpa panggil Groq — ${#VIDEO_LIST[@]} video, $TOTAL_NEED perlu proses"
+    for v in "${VIDEO_LIST[@]}"; do echo "  - $(basename "$v")"; done
+    for v in "${NEED_PROCESS[@]}"; do echo "  → perlu: $(basename "$v")"; done
+    # dry-run estimasi via srt --dry-run (tanpa Groq)
+    for v in "${NEED_PROCESS[@]}"; do
+        base="$(basename "$v")"; stem="${base%.*}"
+        # whisper dry-run
+        [ -f "$WHISPER_SRT_DIR/$stem.srt" ] || echo "  [dry-run] transcribe: $base → $WHISPER_SRT_DIR/$stem.srt"
+    done
+    json_log "{\"event\":\"dry_run\",\"total\":${#VIDEO_LIST[@]},\"need\":$TOTAL_NEED}"
+    exit 0
+fi
+
 for idx in "${!VIDEO_LIST[@]}"; do
     video="${VIDEO_LIST[$idx]}"
     base="$(basename "$video")"
@@ -495,6 +665,7 @@ for idx in "${!VIDEO_LIST[@]}"; do
         else
             info "Output final sudah ada: $final_srt"
             ok "Skip video ini."
+            json_log "{\"event\":\"video_skip\",\"video\":\"$base\",\"output\":\"$final_srt\"}"
             ((SKIPPED++))
             continue
         fi
@@ -519,12 +690,14 @@ for idx in "${!VIDEO_LIST[@]}"; do
         info "SRT Whisper sudah ada, pakai ulang: $whisper_srt"
     else
         info "Transcribe 1 video saja..."
+        # ponytail: dry-run/verbose/json diteruskan ke python
         run_with_spinner "Transcribe" \
             run_in_venv "$WHISPER_DIR" python3 transcribe.py \
-                --lang "$SUBTITLE_LANG" --video "$video" --output "$whisper_srt"
+                --lang "$SUBTITLE_LANG" --video "$video" --output "$whisper_srt" $WHISPER_EXTRA
         code=$?
         if [ $code -ne 0 ] || [ ! -s "$whisper_srt" ]; then
             warn "Transcribe gagal untuk $base"
+            json_log "{\"event\":\"transcribe_fail\",\"video\":\"$base\",\"code\":$code}"
             ((FAILED++))
             clean_srt_input
             continue
@@ -537,6 +710,7 @@ for idx in "${!VIDEO_LIST[@]}"; do
     fi
     if ! validate_lang "$SRC_LANG" || [ "$SRC_LANG" = "auto" ]; then
         warn "Bahasa sumber tidak valid/terdeteksi untuk $base"
+        json_log "{\"event\":\"lang_invalid\",\"video\":\"$base\",\"lang\":\"$SRC_LANG\"}"
         ((FAILED++))
         clean_srt_input
         continue
@@ -546,6 +720,7 @@ for idx in "${!VIDEO_LIST[@]}"; do
     # ── 2) COPY ke SRT input (folder sudah bersih) ───────────────────────────
     cp -f "$whisper_srt" "$srt_input_srt" || {
         warn "Gagal copy SRT ke SRT input."
+        json_log "{\"event\":\"copy_fail\",\"video\":\"$base\"}"
         ((FAILED++))
         continue
     }
@@ -555,10 +730,11 @@ for idx in "${!VIDEO_LIST[@]}"; do
     info "Translate 1 SRT saja..."
     run_with_spinner "Translate" \
         run_in_venv "$SRT_DIR" python3 srt.py \
-            --lang "$SRC_LANG" --input "$srt_input_srt" --output "$final_srt"
+            --lang "$SRC_LANG" --input "$srt_input_srt" --output "$final_srt" $SRT_EXTRA
     code=$?
     if [ $code -ne 0 ] || [ ! -s "$final_srt" ]; then
         warn "Translate gagal untuk $stem.srt"
+        json_log "{\"event\":\"translate_fail\",\"video\":\"$base\",\"code\":$code}"
         ((FAILED++))
         clean_srt_input
         continue
@@ -593,7 +769,11 @@ for idx in "${!VIDEO_LIST[@]}"; do
                 # ponytail: CLEAN=1 → trash source setelah softsub sukses, bukan
                 # hapus permanen (bisa dipulihkan dari ~/.local/share/Trash).
                 if [ "$CLEAN" = "1" ]; then
-                    to_trash "$video"
+                    # ponytail: video di luar whisper/videos bukan milik pipeline — jangan trash
+                    case "$video" in
+                        "$VIDEO_DIR"/*) to_trash "$video" ;;
+                        *) info "CLEAN: video luar ($video) tidak di-trash; cache+SRT saja." ;;
+                    esac
                     to_trash "$whisper_srt"
                     to_trash "$whisper_lang_file"
                     to_trash "$final_srt"
@@ -601,11 +781,13 @@ for idx in "${!VIDEO_LIST[@]}"; do
                 fi
             else
                 warn "Mux gagal untuk $stem"
+                json_log "{\"event\":\"mux_fail\",\"video\":\"$base\"}"
             fi
         fi
     fi
 
     ok "Selesai: $final_srt"
+    json_log "{\"event\":\"video_done\",\"video\":\"$base\",\"lang\":\"$SRC_LANG\",\"output\":\"$final_srt\",\"success\":1}"
     ((SUCCESS++))
     ((PROCESSED++))
 
@@ -624,6 +806,10 @@ ELAPSED=$((SECONDS - START_TIME))
 MINS=$((ELAPSED / 60))
 SECS=$((ELAPSED % 60))
 
+# ponytail: TUI_QUIET — ringkasan 1 baris (layar selesai TUI gantikan box)
+if [ -n "${TUI_QUIET:-}" ]; then
+    echo "SELESAI OK=$SUCCESS SKIP=$SKIPPED FAIL=$FAILED ${MINS}m${SECS}s"
+else
 echo ""
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════╗${RESET}"
 echo -e "${BOLD}${GREEN}║  SELESAI                                         ║${RESET}"
@@ -638,6 +824,8 @@ if [ "$MKV" = "1" ]; then
 fi
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════╝${RESET}"
 echo ""
+fi
+json_log "{\"event\":\"pipeline_end\",\"success\":$SUCCESS,\"skip\":$SKIPPED,\"fail\":$FAILED,\"elapsed\":$ELAPSED}"
 
 [ "$FAILED" -gt 0 ] && exit 1
 exit 0

@@ -25,3 +25,6 @@ srt/subtitles/*
 !srt/subtitles/.gitkeep
 output/*
 !output/.gitkeep
+
+# ledger pemakaian token harian (lokal, regenerasi otomatis)
+srt/.usage.json
